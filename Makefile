@@ -15,9 +15,9 @@ precommit:
 
 .PHONY: tests
 tests:
-	.venv/bin/pytest tests/
-	.venv/bin/lit tests/filecheck/
+	uv run pytest tests/
+	uv run lit tests/filecheck/
 
 .PHONY: bench
 bench:
-	.venv/bin/snakemake --cores all
+	uv run snakemake --cores all
