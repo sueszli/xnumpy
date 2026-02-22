@@ -1,0 +1,18 @@
+fix memref lowering
+
+- https://github.com/xdslproject/xdsl/pull/4371/changes
+- https://mlir.llvm.org/docs/Dialects/MemRef/#memrefsubview-memrefsubviewop
+- https://mlir.llvm.org/docs/Dialects/MemRef/#memrefreinterpret_cast-memrefreinterpretcastop
+
+- (a) lower to pointers (pretend you dont have permission) → infer offset (between inner and outer offset)
+- (b) lower to struct (pointer to inner data, shape, offset, stride) → more popular
+
+- one of the steps in the translation is going from memrefs to pointers. the way it is is not good.
+- not sure if one is better than the other. compare them. eval correctness.
+- do pointer arithmetic at creation, so reads are faster and its compatible with xdsl when we want to merge upstream.
+- if the offset is in the type, inversion is trivial, because you just negate the offset to go back. otherwise panic (this happens for some ops, this is out of scope for now).
+- would need some upstream changes to exo and xdsl, exo team might be open to it.
+    - for exo: emit llvm ir from exo (in addition to c)
+    - for xdsl: reimplement exo in xdsl?
+
+hook that up to llvmlite using xdsl then we could compare real linear algebra things
