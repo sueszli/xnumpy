@@ -1,4 +1,4 @@
-# RUN: EXO-FILECHECK
+# RUN: FILECHECK-LLVM
 
 from __future__ import annotations
 
