@@ -115,13 +115,8 @@ def compile_path(
     """
     Compile all procedures in a Python source file to a single MLIR module, and write it to a file.
     """
-    if not src.exists():
-        print(f"ERROR: {src} does not exist.", file=sys.stderr)
-        return
-
-    if not src.is_file() or not src.suffix == ".py":
-        print(f"ERROR: {src} is not a Python source file.", file=sys.stderr)
-        return
+    assert src.exists(), f"{src} does not exist."
+    assert src.is_file() and src.suffix == ".py", f"{src} is not a Python source file."
 
     if opts.verbose:
         print(f"INFO: Compile[{src}] Destination: {dest}", file=sys.stderr)
