@@ -1,5 +1,0 @@
-usage:
-
-```bash
-uv run xdsl-exo examples/vadd.py --target llvm
-```
