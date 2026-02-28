@@ -1,8 +1,4 @@
-## usage
-
-```
-uv run xdsl-exo examples/matmul.py
-```
+usage: `uv run xdsl-exo examples/matmul.py`
 
 ## references
 
