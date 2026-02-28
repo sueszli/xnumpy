@@ -375,12 +375,12 @@ class IRGenerator:
             block = Block(arg_types=input_types)
             self.builder = Builder(insertion_point=InsertPoint.at_end(block))
 
-            for proc_arg, block_arg in zip(procedure.args, block.args):
-                self.symbol_table[repr(proc_arg.name)] = block_arg
-                self.type_table[repr(proc_arg.name)] = proc_arg.type
+            self.symbol_table = ScopedDict(local_scope={repr(a.name): b for a, b in zip(procedure.args, block.args)})
+            self.type_table = ScopedDict(local_scope={repr(a.name): a.type for a in procedure.args})
 
             for s in procedure.body:
                 self._stmt(s)
+
             self.builder.insert(ReturnOp())
 
         module_builder = Builder(insertion_point=InsertPoint.at_end(self.module.body.blocks[0]))
