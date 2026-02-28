@@ -83,9 +83,8 @@ class IRGenerator:
             case _:
                 assert False
 
-    def _shape(self, type, *, dynamic=False) -> list:
-        # returns T.Tensor shape
-        assert isinstance(type, T.Tensor)
+    def _shape(self, tensor, *, dynamic=False) -> list:
+        assert isinstance(tensor, T.Tensor)
 
         def from_expr(expr):
             match expr:
@@ -98,7 +97,7 @@ class IRGenerator:
                 case _:
                     assert False
 
-        return [from_expr(expr) for expr in type.shape()]
+        return [from_expr(expr) for expr in tensor.shape()]
 
     def _const_expr(self, const):
         type = self._type(const.type)
