@@ -30,7 +30,8 @@ from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsP
 from xdsl.utils.scoped_dict import ScopedDict
 
 from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, FreeOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
-from xdsl_exo.dialects.extra import Index, LLVMIntrinsics
+from xdsl_exo.dialects.index import Index
+from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.platforms.avx2 import InlineAVX2Pass
 from xdsl_exo.platforms.blas import InlineBLASAllocPass, InlineBLASPass
 from xdsl_exo.rewrites.add_prefix import AddPrefixPass

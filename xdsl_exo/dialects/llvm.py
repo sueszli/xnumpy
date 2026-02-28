@@ -1,41 +1,11 @@
-# custom dialect definitions for ops that xdsl doesn't provide upstream
+# llvm intrinsic ops missing from upstream xdsl
 
 from typing import ClassVar
 
-from xdsl.dialects.builtin import I1, AnyFloatConstr, AnySignlessIntegerOrIndexType, IndexType, IntegerAttr, IntegerType, VectorType, i32
+from xdsl.dialects.builtin import I1, AnyFloatConstr, IntegerAttr, VectorType, i32
 from xdsl.dialects.llvm import LLVMPointerType
 from xdsl.ir import Dialect, Operation, SSAValue
 from xdsl.irdl import Attribute, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def
-
-
-@irdl_op_definition
-class CastsOp(IRDLOperation):
-    name = "index.casts"
-
-    input = operand_def(AnySignlessIntegerOrIndexType)
-    result = result_def(AnySignlessIntegerOrIndexType)
-
-    assembly_format = "$input attr-dict `:` type($input) `to` type($result)"
-
-    def __init__(self, input: SSAValue | Operation, result_type: Attribute) -> None:
-        super().__init__(
-            operands=[input],
-            result_types=[result_type],
-        )
-
-    def verify_(self):
-        if isinstance(self.input.type, IndexType):
-            assert isinstance(self.result.type, IntegerType) and not isinstance(self.result.type, IndexType), "result type must be integer for index type input"
-
-        elif isinstance(self.input.type, IntegerType):
-            assert isinstance(self.result.type, IndexType), "result type must be index type for integer type input"
-
-
-Index = Dialect(
-    "index",
-    [CastsOp],
-    [],
-)
 
 
 @irdl_op_definition

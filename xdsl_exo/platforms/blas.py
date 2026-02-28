@@ -6,7 +6,8 @@ from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefT
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 
-from xdsl_exo.dialects import exo, extra
+from xdsl_exo.dialects import exo
+from xdsl_exo.dialects import llvm as llvm_extra
 
 
 class ConvertAllocOp(RewritePattern):
@@ -101,7 +102,7 @@ class ConvertVecAbsF32x8(RewritePattern):
                     op.arguments[1],
                     VectorType(f32, [8]),
                 ),
-                fabs_op := extra.FAbsOp(
+                fabs_op := llvm_extra.FAbsOp(
                     load_op.dereferenced_value,
                     VectorType(f32, [8]),
                 ),
@@ -157,7 +158,7 @@ class ConvertVecAbsF32x8Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f32, [8]),
                 ),
-                fabs_op := extra.FAbsOp(
+                fabs_op := llvm_extra.FAbsOp(
                     load_op.dereferenced_value,
                     VectorType(f32, [8]),
                 ),
@@ -165,7 +166,7 @@ class ConvertVecAbsF32x8Pfx(RewritePattern):
                     load_op.dereferenced_value,
                     op.arguments[1],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fabs_op.result,
                     op.arguments[1],
                     mask_op.res,
@@ -201,7 +202,7 @@ class ConvertVecAbsF64x4(RewritePattern):
                     op.arguments[1],
                     VectorType(f64, [4]),
                 ),
-                fabs_op := extra.FAbsOp(
+                fabs_op := llvm_extra.FAbsOp(
                     load_op.dereferenced_value,
                     VectorType(f64, [4]),
                 ),
@@ -258,7 +259,7 @@ class ConvertVecAbsF64x4Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f64, [4]),
                 ),
-                fabs_op := extra.FAbsOp(
+                fabs_op := llvm_extra.FAbsOp(
                     load_op.dereferenced_value,
                     VectorType(f64, [4]),
                 ),
@@ -266,7 +267,7 @@ class ConvertVecAbsF64x4Pfx(RewritePattern):
                     load_op.dereferenced_value,
                     op.arguments[1],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fabs_op.result,
                     op.arguments[1],
                     mask_op.res,
@@ -364,7 +365,7 @@ class ConvertVecAddRedF32x8Pfx(RewritePattern):
                     VectorType(f32, [8]),
                 ),
                 add_op := llvm.FAddOp(load0_op.dereferenced_value, load1_op.dereferenced_value),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     add_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -463,7 +464,7 @@ class ConvertVecAddRedF64x4Pfx(RewritePattern):
                     VectorType(f64, [4]),
                 ),
                 add_op := llvm.FAddOp(load0_op.dereferenced_value, load1_op.dereferenced_value),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     add_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -551,7 +552,7 @@ class ConvertVecCopyF32x8Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f32, [8]),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -640,7 +641,7 @@ class ConvertVecCopyF64x4Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f64, [4]),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -726,7 +727,7 @@ class ConvertVecLoadF32x8Pfx(RewritePattern):
                     IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64),
                 ),
                 load_op := llvm.LoadOp(op.arguments[2], VectorType(f32, [8])),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -816,7 +817,7 @@ class ConvertVecLoadF64x4Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f64, [4]),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -1060,7 +1061,7 @@ class ConvertVecAddF32x8Pfx(RewritePattern):
                     VectorType(f32, [8]),
                 ),
                 add_op := llvm.FAddOp(load0_op.dereferenced_value, load1_op.dereferenced_value),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     add_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -1165,7 +1166,7 @@ class ConvertVecAddF64x4Pfx(RewritePattern):
                     VectorType(f64, [4]),
                 ),
                 add_op := llvm.FAddOp(load0_op.dereferenced_value, load1_op.dereferenced_value),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     add_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -1251,7 +1252,7 @@ class ConvertVecBrdcstSclF32x8Pfx(RewritePattern):
                     operands=[op.arguments[2]],
                     result_types=[VectorType(f32, [8])],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     broadcast_op.vector,
                     op.arguments[1],
                     mask_op.res,
@@ -1337,7 +1338,7 @@ class ConvertVecBrdcstSclF64x4Pfx(RewritePattern):
                     operands=[op.arguments[2]],
                     result_types=[VectorType(f64, [4])],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     broadcast_op.vector,
                     op.arguments[1],
                     mask_op.res,
@@ -1475,7 +1476,7 @@ class ConvertVecFmadd2F32x8Pfx(RewritePattern):
                         VectorType(f32, [8]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -1616,7 +1617,7 @@ class ConvertVecFmadd2F64x4Pfx(RewritePattern):
                         VectorType(f64, [4]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -1704,7 +1705,7 @@ class ConvertVecStoreF32x8Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f32, [8]),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -1792,7 +1793,7 @@ class ConvertVecStoreF64x4Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f64, [4]),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     load_op.dereferenced_value,
                     op.arguments[1],
                     mask_op.res,
@@ -1931,7 +1932,7 @@ class ConvertVecFmaddRedF32x8Pfx(RewritePattern):
                         VectorType(f32, [8]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2068,7 +2069,7 @@ class ConvertVecFmaddRedF64x4Pfx(RewritePattern):
                         VectorType(f64, [4]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2209,7 +2210,7 @@ class ConvertVecFmadd1F32x8Pfx(RewritePattern):
                         VectorType(f32, [8]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2348,7 +2349,7 @@ class ConvertVecFmadd1F64x4Pfx(RewritePattern):
                         VectorType(f64, [4]),
                     ],
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     fma_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2459,7 +2460,7 @@ class ConvertVecMulF32x8Pfx(RewritePattern):
                     load1_op.dereferenced_value,
                     load2_op.dereferenced_value,
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     mul_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2567,7 +2568,7 @@ class ConvertVecMulF64x4Pfx(RewritePattern):
                     load1_op.dereferenced_value,
                     load2_op.dereferenced_value,
                 ),
-                extra.MaskedStoreOp(mul_op.res, op.arguments[1], mask_op.res),
+                llvm_extra.MaskedStoreOp(mul_op.res, op.arguments[1], mask_op.res),
             )
         )
 
@@ -2661,7 +2662,7 @@ class ConvertVecNegF32x8Pfx(RewritePattern):
                     zero_vec_op.result,
                     load_op.dereferenced_value,
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     neg_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2762,7 +2763,7 @@ class ConvertVecNegF64x4Pfx(RewritePattern):
                     zero_vec_op.result,
                     load_op.dereferenced_value,
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     neg_op.res,
                     op.arguments[1],
                     mask_op.res,
@@ -2808,7 +2809,7 @@ class ConvertVecZeroF32x8Pfx(RewritePattern):
                     broadcast_thresh_op.vector,
                     IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     zero_vec_op.result,
                     op.arguments[1],
                     mask_op.res,
@@ -2854,7 +2855,7 @@ class ConvertVecZeroF64x4Pfx(RewritePattern):
                     broadcast_thresh_op.vector,
                     IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64),
                 ),
-                extra.MaskedStoreOp(
+                llvm_extra.MaskedStoreOp(
                     zero_vec_op.result,
                     op.arguments[1],
                     mask_op.res,
