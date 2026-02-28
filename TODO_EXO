@@ -1,53 +1,96 @@
 Exo Dialect: Which Ops Are Necessary?
 
-3 of 8 can be trivially replaced. 5 of 8 are structurally necessary.
+
+TWO LOWERING STRATEGIES
+=======================
+
+Option A: Raw pointers (current)
+  Functions take raw pointers. Array access is ptr + offset via manual stride math.
+  exo.read → cast memref to ptr → gep(ptr, i*stride0 + j*stride1) → llvm.load
+
+Option B: Memref descriptors (standard MLIR)
+  Functions take descriptor structs {base_ptr, offset, sizes[], strides[]}.
+  memref.load → extract ptr from descriptor → gep(ptr, linearized offset) → llvm.load
 
 
-CAN BE ELIMINATED
-=================
+RAW POINTERS WINS FOR EXO
+==========================
 
-exo.instr -> func.call (no results)
-  Opaque call by symbol name, no return value. Semantically identical to func.call.
-  - main.py:342: InstrOp(name, args) -> CallOp(name, args, [])
-  - inline_avx2.py, inline_blas.py: change pattern match from exo.InstrOp to func.CallOp
-    (all patterns already guard on callee name, both ops have same callee/arguments attrs)
+Exo's own C backend produces: void matmul(ctxt, f32* C, f32* A, f32* B)
+Raw pointer approach produces: void matmul(ptr %C, ptr %A, ptr %B)
+Memref descriptor approach:    void matmul(ptr %C.base, ptr %C.aligned, i64 %C.offset,
+                                 i64 %C.size0, i64 %C.size1, i64 %C.stride0, i64 %C.stride1,
+                                 ... same for A and B ...)  → 21 args instead of 3
 
-exo.extern -> func.call (with result)
-  Same as instr but with a return value.
-  - main.py:245: ExternOp(name, args, type) -> CallOp(name, args, [type])
-  - inline_blas.py:59 ConvertSelect: change type annotation, op.result -> op.res[0]
+Why raw pointers:
+  - Matches Exo's C backend calling convention exactly
+  - C/Python callers pass raw pointers, no descriptor packing needed
+  - Platform intrinsics (AVX2, BLAS) operate on raw pointers
+  - All Exo arrays are contiguous row-major, no exotic layouts that need
+    runtime stride tracking. Strides are computable from shapes.
+  - Less overhead, cleaner LLVM IR
 
-exo.reduce -> inline expansion
-  Compound op (load + add + store). Expand into exo.read + arith.add + exo.assign at IR gen time.
-  - main.py:265-273: emit ReadOp + arith add + AssignOp instead of ReduceOp
-  - delete ConvertReduceOp from convert_memref_to_llvm.py:153-205
-  - delete ConvertReduceToTensor from convert_scalar_ref.py:71-83
-  - delete ConvertReduceOp from convert_tensor_ref.py:60-108
-  - convert_scalar_ref.py:94: ReduceOp check becomes AssignOp-only
-  - CSE already eliminates the duplicate GEP from separate read+assign
-
-
-NECESSARY (tied to manual-stride lowering)
-==========================================
-
-These exist because the project uses raw pointers + manual stride computation
-instead of memref descriptors + standard MLIR lowering. Replacing any of them
-requires switching the entire lowering strategy.
-
-exo.alloc    - custom memory space allocation (DRAM->malloc, VEC_AVX2->alloca)
-exo.read     - gep + llvm.load with manual stride math (carries explicit sizes)
-exo.assign   - gep + llvm.store with manual stride math (carries explicit sizes)
-exo.window   - gep + cast for sub-views (explicit input/output sizes)
-exo.interval - helper for window index computation, erased after window lowering
+Why not memref descriptors:
+  - Calling convention mismatch (descriptor structs vs raw pointers)
+  - Descriptor fields are redundant for contiguous row-major layout
+  - Would need custom extraction before passing to intrinsics
+  - convert_tensor_ref.py exists (exo ops → memref ops) but was never
+    plugged into the pipeline. Likely abandoned because it leads to
+    descriptors which don't fit Exo.
 
 
-FILES
-=====
+THE EXO OPS QUESTION (separate from lowering strategy)
+======================================================
 
-dialects/exo.py                  all 8 (definitions)
-main.py                          all 8 (IR generation)
-rewrites/convert_memref_to_llvm  AllocOp, ReadOp, AssignOp, ReduceOp, WindowOp, IntervalOp
-rewrites/convert_scalar_ref      ReadOp, AssignOp, ReduceOp, AllocOp
-rewrites/convert_tensor_ref      ReadOp, AssignOp, ReduceOp, WindowOp, IntervalOp
-rewrites/inline_avx2             InstrOp (4 patterns)
-rewrites/inline_blas             InstrOp (~50 patterns), ExternOp (1), AllocOp (1)
+The lowering strategy (raw pointers) is correct. But do we need custom exo ops
+as the intermediary, or could we emit something else from the IR generator?
+
+Three options for the intermediary representation:
+
+  1. Exo ops (current) — exo.read, exo.assign, etc. Custom ops that carry
+     sizes explicitly. Lowered by convert_memref_to_llvm.py to gep+load/store.
+
+  2. Standard memref ops — memref.load, memref.store, etc. Would need a custom
+     lowering pass (not the standard memref-to-llvm) to get raw pointers out.
+     Basically the same work as (1), just matching different op types.
+
+  3. LLVM ops directly — emit gep+load/store from the IR generator. No
+     intermediary at all. Makes the IR generator more complex and the
+     intermediate IR less readable.
+
+Option 1 vs 2 is roughly a wash. Both need a custom lowering pass to get raw
+pointers. The exo ops carry sizes as explicit operands; memref ops carry sizes
+in the type. For the lowering pass, explicit operands are slightly more
+convenient (no need to extract from type).
+
+Option 3 is worse: mixes concerns and produces unreadable intermediate IR.
+
+Conclusion: the exo memory ops (read, assign, alloc, window, interval) are a
+reasonable intermediary for the raw-pointer lowering path. They're not strictly
+necessary but they're not the problem either.
+
+
+WHAT IS ACTUALLY UNNECESSARY
+=============================
+
+exo.instr → func.call (no results)
+  Opaque call by symbol name. Identical to func.call. No reason for custom op.
+
+exo.extern → func.call (with result)
+  Same as instr but returns a value. func.call supports this.
+
+exo.reduce → exo.read + arith.add + exo.assign
+  Compound op. Expand inline at IR generation time.
+
+
+WHAT TO DO
+==========
+
+1. Delete exo.instr, exo.extern, exo.reduce from the dialect
+2. Update IR generator to use func.call for instr/extern, inline reduce
+3. Update platform passes to pattern match func.CallOp instead of exo.InstrOp
+4. Delete ConvertReduceOp from convert_memref_to_llvm.py, convert_scalar_ref.py
+5. Keep exo.read, exo.assign, exo.alloc, exo.window, exo.interval — they're
+   a reasonable intermediary for the raw-pointer lowering path
+6. Delete convert_tensor_ref.py — it's dead code from an abandoned experiment
+   with memref descriptors

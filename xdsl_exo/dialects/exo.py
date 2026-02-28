@@ -226,32 +226,6 @@ class InstrOp(IRDLOperation):
         super().__init__(operands=[arguments], result_types=[], properties={"callee": callee})
 
 
-@irdl_op_definition
-class ExternOp(IRDLOperation):
-    name = "exo.extern"
-
-    arguments = var_operand_def()
-    result = result_def()
-
-    callee = prop_def(FlatSymbolRefAttrConstr)
-
-    assembly_format = "$callee attr-dict `(` $arguments `)` `:` type($arguments) `->` type($result)"
-
-    def __init__(
-        self,
-        callee: str | SymbolRefAttr,
-        arguments: Sequence[SSAValue | Operation],
-        result_type: Attribute,
-    ) -> None:
-        if isinstance(callee, str):
-            callee = SymbolRefAttr(callee)
-        super().__init__(
-            operands=[arguments],
-            result_types=[result_type],
-            properties={"callee": callee},
-        )
-
-
 Exo = Dialect(
     "exo",
     [
@@ -262,7 +236,6 @@ Exo = Dialect(
         WindowOp,
         IntervalOp,
         InstrOp,
-        ExternOp,
     ],
     [],
 )

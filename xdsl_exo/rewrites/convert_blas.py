@@ -1,7 +1,7 @@
 from functools import reduce
 
 from xdsl.context import Context
-from xdsl.dialects import arith, llvm, memref, vector
+from xdsl.dialects import arith, func, llvm, memref, vector
 from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
@@ -54,16 +54,27 @@ class ConvertBLASAllocPass(ModulePass):
         ).rewrite_module(m)
 
 
+class ConvertExternPass(ModulePass):
+    name = "convert-extern"
+
+    def apply(self, ctx: Context, m: ModuleOp) -> None:
+        PatternRewriteWalker(
+            GreedyRewritePatternApplier(
+                [ConvertSelect()],
+            )
+        ).rewrite_module(m)
+
+
 class ConvertSelect(RewritePattern):
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.ExternOp, rewriter: PatternRewriter):
+    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter):
         if op.callee.root_reference.data != "select":
             return
 
         assert len(op.arguments) == 4
         assert op.arguments[0].type == op.arguments[1].type, f"{op.arguments[0].type} != {op.arguments[1].type}"
         assert op.arguments[2].type == op.arguments[3].type, f"{op.arguments[2].type} != {op.arguments[3].type}"
-        assert op.arguments[2].type == op.result.type, f"{op.arguments[2].type} != {op.result.type}"
+        assert op.arguments[2].type == op.res[0].type, f"{op.arguments[2].type} != {op.res[0].type}"
 
         rewriter.replace_matched_op(
             (

@@ -30,10 +30,10 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
+from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.rewrites.convert_avx2 import ConvertAVX2Pass
-from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass
+from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass, ConvertExternPass
 from xdsl_exo.rewrites.convert_memory_space import ConvertMemorySpacePass
 from xdsl_exo.rewrites.convert_memref_to_llvm import ConvertMemRefToLLVM
 from xdsl_exo.rewrites.convert_scalar_ref import ConvertScalarRefPass
@@ -242,8 +242,8 @@ class IRGenerator:
         assert isinstance(extern, LoopIR.Extern)
         output_type = self._type(extern.f.typecheck(extern.args))
         args = [self._expr(e) for e in extern.args]
-        self.builder.insert(op := ExternOp(extern.f.name(), args, output_type))
-        return op.result
+        self.builder.insert(op := CallOp(extern.f.name(), args, [output_type]))
+        return op.res[0]
 
     def _expr(self, expr) -> OpResult | SSAValue:
         match expr:
@@ -435,6 +435,7 @@ def _transform(analyzed_procs: list, target: str = "llvm") -> ModuleOp:
     # (exo memory ops like exo.read, exo.assign, exo.reduce are preserved)
     ConvertMemorySpacePass().apply(ctx, module)
     ConvertScalarRefPass().apply(ctx, module)
+    ConvertExternPass().apply(ctx, module)
     ReconcileIndexCastsPass().apply(ctx, module)
     module.verify()
 
