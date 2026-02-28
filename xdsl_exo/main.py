@@ -120,6 +120,7 @@ class IRGenerator:
         return [from_expr(expr) for expr in tensor.shape()]
 
     def _const_expr(self, const):
+        assert isinstance(const, LoopIR.Const)
         type = self._type(const.type)
 
         if type in [f16, f32, f64]:
@@ -136,6 +137,7 @@ class IRGenerator:
         return const.result
 
     def _read_expr(self, read):
+        assert isinstance(read, LoopIR.Read)
         idx = [self._expr(e) for e in read.idx]
         operand = self.symbol_table[repr(read.name)]
         exo_type = self.type_table[repr(read.name)]
@@ -146,6 +148,7 @@ class IRGenerator:
         return op.result
 
     def _usub_expr(self, usub):
+        assert isinstance(usub, LoopIR.USub)
         expr = self._expr(usub.arg)
         type = self._type(usub.type)
 
@@ -162,6 +165,7 @@ class IRGenerator:
         return usub.result
 
     def _binop_expr(self, binop):
+        assert isinstance(binop, LoopIR.BinOp)
         type = self._type(binop.type)
         if type == i1:
             return self._binop_expr_cmp(binop)
@@ -185,6 +189,7 @@ class IRGenerator:
         return op.result
 
     def _binop_expr_cmp(self, binop):
+        assert isinstance(binop, LoopIR.BinOp)
         integer_cmp_table = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
         float_cmp_table = {"==": "oeq", "!=": "one", "<": "olt", "<=": "ole", ">": "ogt", ">=": "oge"}
 
@@ -209,6 +214,7 @@ class IRGenerator:
         return binop.result
 
     def _window_expr(self, window):
+        assert isinstance(window, LoopIR.WindowExpr)
         idx = [self._w_access(w_access) for w_access in window.idx]
 
         input = self.symbol_table[repr(window.name)]
@@ -234,6 +240,7 @@ class IRGenerator:
                 assert False
 
     def _extern_expr(self, extern):
+        assert isinstance(extern, LoopIR.Extern)
         output_type = self._type(extern.f.typecheck(extern.args))
         args = [self._expr(e) for e in extern.args]
         self.builder.insert(op := ExternOp(extern.f.name(), args, output_type))
@@ -257,6 +264,8 @@ class IRGenerator:
                 assert False
 
     def _store_stmt(self, stmt, op_cls):
+        assert isinstance(stmt, (LoopIR.Assign, LoopIR.Reduce))
+        assert op_cls in (AssignOp, ReduceOp)
         idx = [self._expr(e) for e in stmt.idx]
         value = self._expr(stmt.rhs)
         memref = self.symbol_table[repr(stmt.name)]
@@ -265,6 +274,7 @@ class IRGenerator:
         self.builder.insert(op_cls(value, memref, idx, sizes))
 
     def _if_stmt(self, if_stmt):
+        assert isinstance(if_stmt, LoopIR.If)
         cond = self._expr(if_stmt.cond)
 
         with self._tmp_state():
@@ -285,6 +295,7 @@ class IRGenerator:
         self.builder.insert(IfOp(cond, [], Region(true_block), Region(false_block)))
 
     def _for_stmt(self, for_stmt):
+        assert isinstance(for_stmt, LoopIR.For)
         lo = self._expr(for_stmt.lo)
         hi = self._expr(for_stmt.hi)
         step = ConstantOp(IntegerAttr(1, i64))
@@ -311,6 +322,7 @@ class IRGenerator:
         self.builder.insert(ForOp(lo, hi, step.result, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
+        assert isinstance(alloc, LoopIR.Alloc)
         type = self._type(alloc.type, StringAttr(alloc.mem.name()))
         self.builder.insert(op := AllocOp(alloc.mem.name(), type))
         self.symbol_table[repr(alloc.name)] = op.results[0]
@@ -318,9 +330,11 @@ class IRGenerator:
         return op.result
 
     def _free_stmt(self, free):
+        assert isinstance(free, LoopIR.Free)
         self.builder.insert(FreeOp(self.symbol_table[repr(free.name)], free.mem.name()))
 
     def _call_stmt(self, call):
+        assert isinstance(call, LoopIR.Call)
         args = [self._expr(arg) for arg in call.args]
 
         if call.f.instr is not None:
@@ -358,6 +372,7 @@ class IRGenerator:
                 assert False
 
     def _procedure(self, procedure):
+        assert isinstance(procedure, LoopIR.proc)
         if procedure.name in self.seen_procs:
             return
         self.seen_procs.add(procedure.name)
