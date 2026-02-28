@@ -5,7 +5,7 @@ from exo.API import proc
 from exo.core.LoopIR import LoopIR, T
 from exo.core.memory import DRAM
 from exo.core.prelude import SrcInfo, Sym
-from xdsl.dialects.builtin import i32
+from xdsl.dialects.builtin import StringAttr, i32
 from xdsl.dialects.test import TestOp
 from xdsl.utils.scoped_dict import ScopedDict
 from xdsl.utils.test_value import create_ssa_value
@@ -22,9 +22,9 @@ def with_empty_scope(gen: IRGenerator) -> IRGenerator:
     return gen
 
 
-def with_test_op(gen: IRGenerator, sym: Sym, type) -> IRGenerator:
+def with_test_op(gen: IRGenerator, sym: Sym, type, mem_space: StringAttr | None = None) -> IRGenerator:
     assert gen.symbol_table is not None
-    op = TestOp(result_types=[gen._get_type(type)])
+    op = TestOp(result_types=[gen._type(type, mem_space)])
     gen.builder.insert(op)
     gen.symbol_table[repr(sym)] = op.res[0]
     if gen.type_table is not None:
@@ -96,7 +96,7 @@ def test_emit_assign_op():
         SRC_INFO,
     )
 
-    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE)
+    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE, StringAttr("DRAM"))
     gen._store_stmt(ir, AssignOp)
 
     print(gen.module)
@@ -114,7 +114,7 @@ def test_emit_reduce_op():
         SRC_INFO,
     )
 
-    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE)
+    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE, StringAttr("DRAM"))
     gen._store_stmt(ir, ReduceOp)
 
     print(gen.module)
@@ -183,7 +183,7 @@ def test_emit_free_op():
         SRC_INFO,
     )
 
-    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE)
+    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE, StringAttr("DRAM"))
     gen._free_stmt(ir)
 
     print(gen.module)
@@ -194,7 +194,7 @@ def test_read_op():
     sym_x = Sym("x")
     ir = LoopIR.Read(sym_x, [LoopIR.Const(0, T.index, SRC_INFO)], T.f32, SRC_INFO)
 
-    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE)
+    gen = with_test_op(with_empty_scope(IRGenerator()), sym_x, TENSOR_TYPE, StringAttr("DRAM"))
     gen._read_expr(ir)
 
     print(gen.module)

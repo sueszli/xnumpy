@@ -41,11 +41,11 @@ from xdsl_exo.rewrites.reconcile_index_casts import ReconcileIndexCastsPass
 
 
 class IRGenerator:
-    module: ModuleOp
-    builder: Builder
+    module: ModuleOp  # container for IR
+    builder: Builder  # string builder
     symbol_table: ScopedDict[str, SSAValue] | None
     type_table: ScopedDict[str, Attribute] | None
-    seen_procs: set[str]
+    seen_procs: set[str]  # avoid duplicates
 
     def __init__(self):
         self.module = ModuleOp([])
@@ -58,7 +58,7 @@ class IRGenerator:
     # helpers
     #
 
-    def _get_type(self, t, mem_space=StringAttr("DRAM")) -> Attribute:
+    def _type(self, t, mem_space: StringAttr | None = None) -> Attribute:
         match t:
             case SSAValue():
                 return t.type
@@ -79,12 +79,13 @@ class IRGenerator:
             case T.Bool():
                 return i1
             case T.Tensor():
-                inner = self._get_type(t.type)
-                assert inner in {f16, f32, f64, i8, i16, i32}, f"unknown tensor inner type '{inner}'"
+                assert mem_space is not None
+                inner = self._type(t.type)
+                assert inner in {f16, f32, f64, i8, i16, i32}
                 shape = self._shape(t)
                 return MemRefType(inner, shape, NoneAttr(), mem_space)
             case _:
-                assert False, f"unknown type '{t}'"
+                assert False
 
     def _shape(self, type, *, dynamic=False) -> list:
         assert isinstance(type, T.Tensor)
@@ -98,7 +99,7 @@ class IRGenerator:
                 case LoopIR.BinOp():
                     return self._binop_expr(expr) if dynamic else -1
                 case _:
-                    assert False, f"invalid shape argument {expr}"
+                    assert False
 
         return [from_expr(expr) for expr in type.shape()]
 
@@ -113,7 +114,7 @@ class IRGenerator:
     #
 
     def _const_expr(self, const):
-        type = self._get_type(const.type)
+        type = self._type(const.type)
 
         if type in [f16, f32, f64]:
             attr = FloatAttr(const.val, type)
@@ -122,7 +123,7 @@ class IRGenerator:
         elif type == i1:
             attr = BoolAttr(const.val, i1)
         else:
-            assert False, f"unknown type {type} passed to Const"
+            assert False
 
         const = ConstantOp(attr, type)
         self.builder.insert(const)
@@ -133,13 +134,13 @@ class IRGenerator:
         operand = self.symbol_table[repr(read.name)]
         sizes = self._sizes_for(read.name)
 
-        self.builder.insert(op := ReadOp(operand, idx, sizes, result_type=self._get_type(read.type)))
+        self.builder.insert(op := ReadOp(operand, idx, sizes, result_type=self._type(read.type)))
 
         return op.result
 
     def _usub_expr(self, usub):
         expr = self._expr(usub.arg)
-        type = self._get_type(usub.type)
+        type = self._type(usub.type)
 
         if type in [f16, f32, f64]:
             usub = NegfOp(expr)
@@ -148,13 +149,13 @@ class IRGenerator:
             self.builder.insert(zero)
             usub = SubiOp(zero.result, expr, result_type=type)
         else:
-            assert False, f"bad type {type} passed to USub"
+            assert False
 
         self.builder.insert(usub)
         return usub.result
 
     def _binop_expr(self, binop):
-        type = self._get_type(binop.type)
+        type = self._type(binop.type)
         if type == i1:
             return self._binop_expr_cmp(binop)
 
@@ -171,7 +172,7 @@ class IRGenerator:
             op_cls = int_ops[binop.op]
             op = op_cls(lhs, rhs, result_type=type)
         else:
-            assert False, f"unknown type '{type.name}'"
+            assert False
 
         self.builder.insert(op)
         return op.result
@@ -191,7 +192,7 @@ class IRGenerator:
             elif binop.op == "or":
                 binop = OrIOp(lhs, rhs)
             else:
-                assert False, f"unknown boolean operator '{binop.op}'"
+                assert False
         elif lhs.type in [i8, i16, i32, i64]:
             binop = CmpiOp(lhs, rhs, integer_cmp_table[binop.op])
         else:
@@ -204,7 +205,7 @@ class IRGenerator:
         idx = [self._w_access(w_access) for w_access in window.idx]
 
         input = self.symbol_table[repr(window.name)]
-        dest_type = self._get_type(window.type.as_tensor, input.type.memory_space)
+        dest_type = self._type(window.type.as_tensor, input.type.memory_space)
 
         input_sizes = self._shape(self.type_table[repr(window.name)], dynamic=True)
         output_sizes = self._shape(window.type.as_tensor, dynamic=True)
@@ -223,10 +224,10 @@ class IRGenerator:
                 self.builder.insert(op := IntervalOp(lo, hi))
                 return op.result
             case _:
-                assert False, f"unknown window access type '{type(w_access)}' for '{w_access}'"
+                assert False
 
     def _extern_expr(self, extern):
-        output_type = self._get_type(extern.f.typecheck(extern.args))
+        output_type = self._type(extern.f.typecheck(extern.args))
         args = [self._expr(e) for e in extern.args]
         self.builder.insert(op := ExternOp(extern.f.name(), args, output_type))
         return op.result
@@ -246,7 +247,7 @@ class IRGenerator:
             case LoopIR.Extern():
                 return self._extern_expr(expr)
             case _:
-                assert False, f"unknown expression type '{type(expr)}' for expression '{expr}'"
+                assert False
 
     #
     # statement generation
@@ -315,7 +316,7 @@ class IRGenerator:
         self.builder.insert(ForOp(lo, hi, step.result, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
-        type = self._get_type(alloc.type, StringAttr(alloc.mem.name()))
+        type = self._type(alloc.type, StringAttr(alloc.mem.name()))
         self.builder.insert(op := AllocOp(alloc.mem.name(), type))
         self.symbol_table[repr(alloc.name)] = op.results[0]
         self.type_table[repr(alloc.name)] = alloc.type
@@ -332,9 +333,7 @@ class IRGenerator:
             return
 
         self._procedure(call.f)
-
-        if len(call.args) != len(call.f.args):
-            assert False, f"call to '{call.f.name}' has {len(call.args)} arguments, expected {len(call.f.args)}"
+        assert len(call.args) == len(call.f.args)
 
         self.builder.insert(CallOp(call.f.name, args, []))
 
@@ -361,7 +360,7 @@ class IRGenerator:
             case LoopIR.Window():
                 raise NotImplementedError()
             case _:
-                assert False, f"unknown statement {stmt}"
+                assert False
 
     def _procedure(self, procedure):
         if procedure.name in self.seen_procs:
@@ -371,7 +370,12 @@ class IRGenerator:
         if procedure.instr is not None:
             raise NotImplementedError()
 
-        input_types = [MemRefType(ty.element_type, ty.shape, ty.layout, StringAttr(arg.mem.name())) if isinstance(ty := self._get_type(arg.type), MemRefType) else ty for arg in procedure.args]
+        input_types = []
+        for arg in procedure.args:
+            if hasattr(arg, "mem"):
+                input_types.append(self._type(arg.type, StringAttr(arg.mem.name())))
+            else:
+                input_types.append(self._type(arg.type))
         func_type = FunctionType.from_lists(input_types, [])
 
         parent_builder = self.builder
@@ -415,7 +419,7 @@ class IRGenerator:
 
 
 @cache
-def context() -> Context:
+def _context() -> Context:
     ctx = Context()
     ctx.load_dialect(arith.Arith)
     ctx.load_dialect(Builtin)
@@ -428,8 +432,8 @@ def context() -> Context:
     return ctx
 
 
-def transform(analyzed_procs: list, target: str = "llvm") -> ModuleOp:
-    ctx = context()
+def _transform(analyzed_procs: list, target: str = "llvm") -> ModuleOp:
+    ctx = _context()
 
     # exo LoopIR -> raw exo IR
     module = IRGenerator().generate(analyzed_procs)
@@ -482,7 +486,7 @@ def compile_procs(
         return MemoryAnalysis().run(proc)
 
     analyzed_procs = [exo_analyze(proc) for proc in unique_procs]
-    return transform(analyzed_procs, target)
+    return _transform(analyzed_procs, target)
 
 
 def main():
