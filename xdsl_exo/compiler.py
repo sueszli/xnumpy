@@ -515,10 +515,6 @@ class IRGenerator:
             case _:
                 assert False, f"unknown statement {stmt}"
 
-    #
-    # entry points
-    #
-
     def _procedure(self, procedure):
         if procedure.name in self.seen_procs:
             return
@@ -568,12 +564,7 @@ class IRGenerator:
         for proc in procs:
             self._procedure(proc)
 
-        # TODO: none of the operations actually implement verify_()
-        try:
-            self.module.verify()
-        except Exception as e:
-            print("module verification failed: ", e)
-            raise
+        self.module.verify()  # structural only, exo ops don't implement verify_()
 
         return self.module
 
