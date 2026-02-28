@@ -4,7 +4,7 @@ from functools import reduce
 from xdsl.builder import Builder
 from xdsl.context import Context
 from xdsl.dialects import arith, llvm, memref
-from xdsl.dialects.builtin import IntegerAttr, MemRefType, ModuleOp, UnrealizedConversionCastOp, i8, i16, i32, i64
+from xdsl.dialects.builtin import IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, i8, i16, i32, i64
 from xdsl.dialects.utils import get_dynamic_index_list, split_dynamic_index_list
 from xdsl.ir import Attribute, Operation, SSAValue
 from xdsl.passes import ModulePass
@@ -262,13 +262,15 @@ class ConvertAllocOp(RewritePattern):
 
 class ConvertFreeOp(RewritePattern):
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.FreeOp, rewriter: PatternRewriter):
-        if op.mem.data != "DRAM":
+    def match_and_rewrite(self, op: memref.DeallocOp, rewriter: PatternRewriter):
+        if not isinstance(op.memref.type, MemRefType) or not isinstance(op.memref.type.memory_space, StringAttr):
+            return
+        if op.memref.type.memory_space.data != "DRAM":
             return
 
         rewriter.replace_matched_op(
             (
-                cast_op := UnrealizedConversionCastOp.get([op.input], [llvm.LLVMPointerType()]),
+                cast_op := UnrealizedConversionCastOp.get([op.memref], [llvm.LLVMPointerType()]),
                 llvm.CallOp("free", cast_op.results[0]),
             )
         )

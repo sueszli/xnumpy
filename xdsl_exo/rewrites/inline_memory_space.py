@@ -63,22 +63,6 @@ class ConvertWindowOp(RewritePattern):
         )
 
 
-class ConvertFreeOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.FreeOp, rewriter: PatternRewriter):
-        # convert tensor frees only
-        if not isinstance(op.input.type, MemRefType):
-            return
-
-        assert isinstance(op.input.type.memory_space, StringAttr), "memory space should be a string"
-
-        rewriter.replace_matched_op(
-            memref.DeallocOp.get(
-                op.input,
-            )
-        )
-
-
 class InlineMemorySpacePass(ModulePass):
     name = "inline-memory-space"
 

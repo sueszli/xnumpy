@@ -28,7 +28,7 @@ from exo import *
 # CHECK-NEXT:           %18 = exo.read %13[%c0] -> i32
 # CHECK-NEXT:           %19 = arith.muli %17, %18 : i32
 # CHECK-NEXT:           exo.reduce %19, %6[%9, %10], sizes : [%1, %2], {static_sizes = array<i64: -9223372036854775808, -9223372036854775808>} : i32, memref<-1x-1xi32, "DRAM">
-# CHECK-NEXT:           exo.free %13 "DRAM" : memref<1xi32, "DRAM">
+# CHECK-NEXT:           memref.dealloc %13 : memref<1xi32, "DRAM">
 # CHECK-NEXT:         }
 # CHECK-NEXT:       }
 # CHECK-NEXT:     }

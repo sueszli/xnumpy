@@ -30,7 +30,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, FreeOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
+from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.platforms.avx2 import InlineAVX2Pass
 from xdsl_exo.platforms.blas import InlineBLASAllocPass, InlineBLASPass
@@ -330,7 +330,8 @@ class IRGenerator:
 
     def _free_stmt(self, free):
         assert isinstance(free, LoopIR.Free)
-        self.builder.insert(FreeOp(self.symbol_table[repr(free.name)], free.mem.name()))
+        # memory space is already on the memref type, so standard memref.dealloc suffices
+        self.builder.insert(memref.DeallocOp.get(self.symbol_table[repr(free.name)]))
 
     def _call_stmt(self, call):
         assert isinstance(call, LoopIR.Call)
@@ -407,7 +408,9 @@ class IRGenerator:
         for proc in procs:
             self._procedure(proc)
 
-        self.module.verify()
+        # skip verify here – scalar allocs haven't been promoted to memrefs yet,
+        # so memref.dealloc operands may still have scalar types.
+        # verification runs after ConvertScalarRefPass in _transform().
         return self.module
 
 

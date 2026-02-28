@@ -3,7 +3,8 @@ wait for these to merge
 - https://github.com/xdslproject/xdsl/pull/5683
 - https://github.com/xdslproject/xdsl/pull/5684
 
-streamline / minimize code
+
+minimize code
 
 - see: https://github.com/sueszli/aziz-lang/blob/main/aziz-lang-tiny/main.py
 - "@proc annotated functions -> llvm dialect in mlir" not possible because Exo has concepts that don't map 1:1 to standard MLIR dialects. but try as hard as possible

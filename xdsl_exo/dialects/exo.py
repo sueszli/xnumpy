@@ -33,28 +33,6 @@ class AllocOp(IRDLOperation):
 
 
 @irdl_op_definition
-class FreeOp(IRDLOperation):
-    name = "exo.free"
-
-    input = operand_def()
-
-    mem = prop_def(StringAttr)
-
-    assembly_format = "$input $mem attr-dict `:` type($input)"
-
-    def __init__(
-        self,
-        input: SSAValue | Operation,
-        mem: str,
-    ) -> None:
-        super().__init__(
-            operands=[input],
-            result_types=[],
-            properties={"mem": StringAttr(mem)},
-        )
-
-
-@irdl_op_definition
 class AssignOp(IRDLOperation):
     name = "exo.assign"
 
@@ -278,7 +256,6 @@ Exo = Dialect(
     "exo",
     [
         AllocOp,
-        FreeOp,
         AssignOp,
         ReduceOp,
         ReadOp,

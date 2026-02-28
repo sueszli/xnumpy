@@ -1,8 +1,8 @@
 from functools import reduce
 
 from xdsl.context import Context
-from xdsl.dialects import arith, llvm, vector
-from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefType, ModuleOp, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
+from xdsl.dialects import arith, llvm, memref, vector
+from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 
@@ -34,8 +34,10 @@ class ConvertAllocOp(RewritePattern):
 
 class ConvertFreeOp(RewritePattern):
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.FreeOp, rewriter: PatternRewriter):
-        if op.mem.data != "VEC_AVX2":
+    def match_and_rewrite(self, op: memref.DeallocOp, rewriter: PatternRewriter):
+        if not isinstance(op.memref.type, MemRefType) or not isinstance(op.memref.type.memory_space, StringAttr):
+            return
+        if op.memref.type.memory_space.data != "VEC_AVX2":
             return
 
         rewriter.erase_op(op)
