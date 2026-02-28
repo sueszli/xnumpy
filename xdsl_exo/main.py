@@ -54,10 +54,6 @@ class IRGenerator:
         self.type_table = None
         self.seen_procs = set()
 
-    #
-    # helpers
-    #
-
     def _type(self, t, mem_space: StringAttr | None = None) -> Attribute:
         match t:
             case SSAValue():
@@ -88,30 +84,21 @@ class IRGenerator:
                 assert False
 
     def _shape(self, type, *, dynamic=False) -> list:
+        # returns T.Tensor shape
         assert isinstance(type, T.Tensor)
 
         def from_expr(expr):
             match expr:
                 case LoopIR.Const():
-                    return expr.val
+                    return expr.val  # literal - e.g. `f32[16, 16]`
                 case LoopIR.Read():
-                    return self.symbol_table[repr(expr.name)] if dynamic else -1
+                    return self.symbol_table[repr(expr.name)] if dynamic else -1  # variable - e.g. `f32[M, K]`
                 case LoopIR.BinOp():
-                    return self._binop_expr(expr) if dynamic else -1
+                    return self._binop_expr(expr) if dynamic else -1  # computed size - e.g. `f32[M+1, K*2]`
                 case _:
                     assert False
 
         return [from_expr(expr) for expr in type.shape()]
-
-    def _sizes_for(self, name) -> list:
-        exo_type = self.type_table[repr(name)]
-        if isinstance(exo_type, T.Tensor):
-            return self._shape(exo_type, dynamic=True)
-        return []
-
-    #
-    # expression generation
-    #
 
     def _const_expr(self, const):
         type = self._type(const.type)
@@ -132,7 +119,8 @@ class IRGenerator:
     def _read_expr(self, read):
         idx = [self._expr(e) for e in read.idx]
         operand = self.symbol_table[repr(read.name)]
-        sizes = self._sizes_for(read.name)
+        exo_type = self.type_table[repr(read.name)]
+        sizes = self._shape(exo_type, dynamic=True) if isinstance(exo_type, T.Tensor) else []
 
         self.builder.insert(op := ReadOp(operand, idx, sizes, result_type=self._type(read.type)))
 
@@ -249,15 +237,12 @@ class IRGenerator:
             case _:
                 assert False
 
-    #
-    # statement generation
-    #
-
     def _store_stmt(self, stmt, op_cls):
         idx = [self._expr(e) for e in stmt.idx]
         value = self._expr(stmt.rhs)
         memref = self.symbol_table[repr(stmt.name)]
-        sizes = self._sizes_for(stmt.name)
+        exo_type = self.type_table[repr(stmt.name)]
+        sizes = self._shape(exo_type, dynamic=True) if isinstance(exo_type, T.Tensor) else []
         self.builder.insert(op_cls(value, memref, idx, sizes))
 
     def _if_stmt(self, if_stmt):
@@ -405,10 +390,6 @@ class IRGenerator:
 
         module_builder = Builder(insertion_point=InsertPoint.at_end(self.module.body.blocks[0]))
         module_builder.insert(FuncOp(procedure.name, func_type, Region(block)))
-
-    #
-    # entry point
-    #
 
     def generate(self, procs) -> ModuleOp:
         for proc in procs:
