@@ -76,9 +76,6 @@ WHAT IS ACTUALLY UNNECESSARY
 exo.instr → func.call (no results)
   Opaque call by symbol name. Identical to func.call. No reason for custom op.
 
-exo.extern → func.call (with result)
-  Same as instr but returns a value. func.call supports this.
-
 exo.reduce → exo.read + arith.add + exo.assign
   Compound op. Expand inline at IR generation time.
 
@@ -86,8 +83,8 @@ exo.reduce → exo.read + arith.add + exo.assign
 WHAT TO DO
 ==========
 
-1. Delete exo.instr, exo.extern, exo.reduce from the dialect
-2. Update IR generator to use func.call for instr/extern, inline reduce
+1. Delete exo.instr, exo.reduce from the dialect
+2. Update IR generator to use func.call for instr, inline reduce
 3. Update platform passes to pattern match func.CallOp instead of exo.InstrOp
 4. Delete ConvertReduceOp from convert_memref_to_llvm.py, convert_scalar_ref.py
 5. Keep exo.read, exo.assign, exo.alloc, exo.window, exo.interval — they're
