@@ -226,29 +226,29 @@ class IRGenerator:
             self.generate_stmt(stmt)
 
     def generate_stmt(self, stmt):
-        if isinstance(stmt, LoopIR.Assign):
-            self.generate_assign_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Reduce):
-            self.generate_reduce_stmt(stmt)
-        elif isinstance(stmt, LoopIR.WriteConfig):
-            self.generate_write_config_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Pass):
-            # do nothing!!
-            pass
-        elif isinstance(stmt, LoopIR.If):
-            self.generate_if_stmt(stmt)
-        elif isinstance(stmt, LoopIR.For):
-            self.generate_for_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Alloc):
-            self.generate_alloc_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Free):
-            self.generate_free_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Call):
-            self.generate_call_stmt(stmt)
-        elif isinstance(stmt, LoopIR.Window):
-            assert False, "window statements are not supported"
-        else:
-            assert False, f"unknown statement {stmt}"
+        match stmt:
+            case LoopIR.Assign():
+                self.generate_assign_stmt(stmt)
+            case LoopIR.Reduce():
+                self.generate_reduce_stmt(stmt)
+            case LoopIR.WriteConfig():
+                self.generate_write_config_stmt(stmt)
+            case LoopIR.Pass():
+                pass
+            case LoopIR.If():
+                self.generate_if_stmt(stmt)
+            case LoopIR.For():
+                self.generate_for_stmt(stmt)
+            case LoopIR.Alloc():
+                self.generate_alloc_stmt(stmt)
+            case LoopIR.Free():
+                self.generate_free_stmt(stmt)
+            case LoopIR.Call():
+                self.generate_call_stmt(stmt)
+            case LoopIR.Window():
+                assert False, "window statements are not supported"
+            case _:
+                assert False, f"unknown statement {stmt}"
 
     def generate_assign_stmt(self, assign):
         idx = self.generate_expr_list(assign.idx)
@@ -367,20 +367,21 @@ class IRGenerator:
         return [self.generate_expr(expr) for expr in exprs]
 
     def generate_expr(self, expr) -> OpResult | SSAValue:
-        if isinstance(expr, LoopIR.Read):
-            return self.generate_read_expr(expr)
-        elif isinstance(expr, LoopIR.Const):
-            return self.generate_const_expr(expr)
-        elif isinstance(expr, LoopIR.USub):
-            return self.generate_usub_expr(expr)
-        elif isinstance(expr, LoopIR.BinOp):
-            return self.generate_binop_expr(expr)
-        elif isinstance(expr, LoopIR.WindowExpr):
-            return self.generate_window_expr(expr)
-        elif isinstance(expr, LoopIR.Extern):
-            return self.generate_extern_expr(expr)
-        else:
-            assert False, f"unknown expression type '{type(expr)}' for expression '{expr}'"
+        match expr:
+            case LoopIR.Read():
+                return self.generate_read_expr(expr)
+            case LoopIR.Const():
+                return self.generate_const_expr(expr)
+            case LoopIR.USub():
+                return self.generate_usub_expr(expr)
+            case LoopIR.BinOp():
+                return self.generate_binop_expr(expr)
+            case LoopIR.WindowExpr():
+                return self.generate_window_expr(expr)
+            case LoopIR.Extern():
+                return self.generate_extern_expr(expr)
+            case _:
+                assert False, f"unknown expression type '{type(expr)}' for expression '{expr}'"
 
     def generate_read_expr(self, read):
         idx = self.generate_expr_list(read.idx)
@@ -545,17 +546,16 @@ class IRGenerator:
         return op.result
 
     def generate_w_access(self, w_access):
-        if isinstance(w_access, LoopIR.Point):
-            return self.generate_expr(w_access.pt)
-
-        assert isinstance(w_access, LoopIR.Interval), f"unknown window access type '{type(w_access)}' for '{w_access}'"
-
-        lo = self.generate_expr(w_access.lo)
-        hi = self.generate_expr(w_access.hi)
-
-        self.builder.insert(op := IntervalOp(lo, hi))
-
-        return op.result
+        match w_access:
+            case LoopIR.Point():
+                return self.generate_expr(w_access.pt)
+            case LoopIR.Interval():
+                lo = self.generate_expr(w_access.lo)
+                hi = self.generate_expr(w_access.hi)
+                self.builder.insert(op := IntervalOp(lo, hi))
+                return op.result
+            case _:
+                assert False, f"unknown window access type '{type(w_access)}' for '{w_access}'"
 
     def generate_stride_expr(self, stride):
         raise NotImplementedError("stride expressions are not yet supported")
@@ -575,52 +575,41 @@ class IRGenerator:
         Get the type of a LoopIR type as an MLIR type.
         """
 
-        # mlir
-        if isinstance(t, SSAValue):
-            return t.type
-        # exo
-        if isinstance(t, T.F16):
-            return f16
-        elif isinstance(t, T.F32) or isinstance(t, T.Num):
-            return f32
-        elif isinstance(t, T.F64):
-            return f64
-        elif isinstance(t, T.INT8) or isinstance(t, T.UINT8):
-            return i8
-        elif isinstance(t, T.UINT16):
-            return i16
-        elif isinstance(t, T.INT32):
-            return i32
-        elif isinstance(t, T.Index) or isinstance(t, T.Size) or isinstance(t, T.Int):
-            return i64
-        elif isinstance(t, T.Bool):
-            return i1
-        elif isinstance(t, T.Tensor):
-            inner = self.get_type(t.type)
+        memref_types = {
+            f16: MemRefTypeF16,
+            f32: MemRefTypeF32,
+            f64: MemRefTypeF64,
+            i8: MemRefTypeI8,
+            i16: MemRefTypeI16,
+            i32: MemRefTypeI32,
+        }
 
-            if inner not in [f16, f32, f64, i8, i16, i32]:
-                assert False, f"unknown tensor inner type '{inner}'"
-
-            # compute shape and strides
-            shape = self.get_static_shape(t)
-
-            if inner == f16:
-                return MemRefTypeF16(f16, shape, NoneAttr(), mem_space)
-            elif inner == f32:
-                return MemRefTypeF32(f32, shape, NoneAttr(), mem_space)
-            elif inner == f64:
-                return MemRefTypeF64(f64, shape, NoneAttr(), mem_space)
-            elif inner == i8:
-                return MemRefTypeI8(i8, shape, NoneAttr(), mem_space)
-            elif inner == i16:
-                return MemRefTypeI16(i16, shape, NoneAttr(), mem_space)
-            elif inner == i32:
-                return MemRefTypeI32(i32, shape, NoneAttr(), mem_space)
-            else:
-                assert False, "entered unreachable code"
-
-        else:
-            assert False, f"unknown type '{t}'"
+        match t:
+            case SSAValue():
+                return t.type
+            case T.F16():
+                return f16
+            case T.F32() | T.Num():
+                return f32
+            case T.F64():
+                return f64
+            case T.INT8() | T.UINT8():
+                return i8
+            case T.UINT16():
+                return i16
+            case T.INT32():
+                return i32
+            case T.Index() | T.Size() | T.Int():
+                return i64
+            case T.Bool():
+                return i1
+            case T.Tensor():
+                inner = self.get_type(t.type)
+                assert inner in memref_types, f"unknown tensor inner type '{inner}'"
+                shape = self.get_static_shape(t)
+                return memref_types[inner](inner, shape, NoneAttr(), mem_space)
+            case _:
+                assert False, f"unknown type '{t}'"
 
     def get_shape(self, type) -> tuple[list[IntegerAttr], list[SSAValue]]:
         """
@@ -631,18 +620,19 @@ class IRGenerator:
         dynamic_shapes = []
 
         def attr_from_expr(expr):
-            if isinstance(expr, LoopIR.Const):
-                return IntAttr(expr.val)
-            elif isinstance(expr, LoopIR.Read):
-                if self.symbol_table is not None:
-                    dynamic_shapes.append(self.get_sym(expr.name))
-                return IntAttr(-1)
-            elif isinstance(expr, LoopIR.BinOp):
-                if self.symbol_table is not None:
-                    dynamic_shapes.append(self.generate_binop_expr(expr))
-                return IntAttr(-1)
-            else:
-                assert False, f"invalid shape argument {expr}"
+            match expr:
+                case LoopIR.Const():
+                    return IntAttr(expr.val)
+                case LoopIR.Read():
+                    if self.symbol_table is not None:
+                        dynamic_shapes.append(self.get_sym(expr.name))
+                    return IntAttr(-1)
+                case LoopIR.BinOp():
+                    if self.symbol_table is not None:
+                        dynamic_shapes.append(self.generate_binop_expr(expr))
+                    return IntAttr(-1)
+                case _:
+                    assert False, f"invalid shape argument {expr}"
 
         return ([attr_from_expr(expr) for expr in type.shape()], dynamic_shapes)
 
@@ -653,14 +643,13 @@ class IRGenerator:
         assert isinstance(type, T.Tensor)
 
         def attr_from_expr(expr):
-            if isinstance(expr, LoopIR.Const):
-                return expr.val
-            elif isinstance(expr, LoopIR.Read):
-                return -1
-            elif isinstance(expr, LoopIR.BinOp):
-                return -1
-            else:
-                assert False, f"invalid shape argument {expr}"
+            match expr:
+                case LoopIR.Const():
+                    return expr.val
+                case LoopIR.Read() | LoopIR.BinOp():
+                    return -1
+                case _:
+                    assert False, f"invalid shape argument {expr}"
 
         return [attr_from_expr(expr) for expr in type.shape()]
 
@@ -671,13 +660,14 @@ class IRGenerator:
         assert isinstance(type, T.Tensor)
 
         def attr_from_expr(expr):
-            if isinstance(expr, LoopIR.Const):
-                return expr.val
-            elif isinstance(expr, LoopIR.Read):
-                return self.get_sym(expr.name)
-            elif isinstance(expr, LoopIR.BinOp):
-                return self.generate_binop_expr(expr)
-            else:
-                assert False, f"invalid shape argument {expr}"
+            match expr:
+                case LoopIR.Const():
+                    return expr.val
+                case LoopIR.Read():
+                    return self.get_sym(expr.name)
+                case LoopIR.BinOp():
+                    return self.generate_binop_expr(expr)
+                case _:
+                    assert False, f"invalid shape argument {expr}"
 
         return [attr_from_expr(expr) for expr in type.shape()]
