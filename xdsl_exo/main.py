@@ -32,11 +32,11 @@ from xdsl.utils.scoped_dict import ScopedDict
 
 from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
+from xdsl_exo.rewrites.convert_avx2 import ConvertAVX2Pass
+from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass
+from xdsl_exo.rewrites.convert_memory_space import ConvertMemorySpacePass
 from xdsl_exo.rewrites.convert_memref_to_llvm import ConvertMemRefToLLVM
 from xdsl_exo.rewrites.convert_scalar_ref import ConvertScalarRefPass
-from xdsl_exo.rewrites.inline_avx2 import InlineAVX2Pass
-from xdsl_exo.rewrites.inline_blas import InlineBLASAllocPass, InlineBLASPass
-from xdsl_exo.rewrites.inline_memory_space import InlineMemorySpacePass
 from xdsl_exo.rewrites.reconcile_index_casts import ReconcileIndexCastsPass
 
 
@@ -433,7 +433,7 @@ def _transform(analyzed_procs: list, target: str = "llvm") -> ModuleOp:
 
     # partial lowering: convert memory spaces, scalar refs, and index casts to standard mlir
     # (exo memory ops like exo.read, exo.assign, exo.reduce are preserved)
-    InlineMemorySpacePass().apply(ctx, module)
+    ConvertMemorySpacePass().apply(ctx, module)
     ConvertScalarRefPass().apply(ctx, module)
     ReconcileIndexCastsPass().apply(ctx, module)
     module.verify()
@@ -447,10 +447,10 @@ def _transform(analyzed_procs: list, target: str = "llvm") -> ModuleOp:
         return module
 
     # full lowering to llvm dialect
-    InlineBLASAllocPass().apply(ctx, module)
+    ConvertBLASAllocPass().apply(ctx, module)
     ConvertMemRefToLLVM().apply(ctx, module)
-    InlineAVX2Pass().apply(ctx, module)
-    InlineBLASPass().apply(ctx, module)
+    ConvertAVX2Pass().apply(ctx, module)
+    ConvertBLASPass().apply(ctx, module)
     ConvertScfToCf().apply(ctx, module)
     ReconcileUnrealizedCastsPass().apply(ctx, module)
     module.verify()

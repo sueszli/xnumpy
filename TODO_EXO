@@ -1,0 +1,53 @@
+Exo Dialect: Which Ops Are Necessary?
+
+3 of 8 can be trivially replaced. 5 of 8 are structurally necessary.
+
+
+CAN BE ELIMINATED
+=================
+
+exo.instr -> func.call (no results)
+  Opaque call by symbol name, no return value. Semantically identical to func.call.
+  - main.py:342: InstrOp(name, args) -> CallOp(name, args, [])
+  - inline_avx2.py, inline_blas.py: change pattern match from exo.InstrOp to func.CallOp
+    (all patterns already guard on callee name, both ops have same callee/arguments attrs)
+
+exo.extern -> func.call (with result)
+  Same as instr but with a return value.
+  - main.py:245: ExternOp(name, args, type) -> CallOp(name, args, [type])
+  - inline_blas.py:59 ConvertSelect: change type annotation, op.result -> op.res[0]
+
+exo.reduce -> inline expansion
+  Compound op (load + add + store). Expand into exo.read + arith.add + exo.assign at IR gen time.
+  - main.py:265-273: emit ReadOp + arith add + AssignOp instead of ReduceOp
+  - delete ConvertReduceOp from convert_memref_to_llvm.py:153-205
+  - delete ConvertReduceToTensor from convert_scalar_ref.py:71-83
+  - delete ConvertReduceOp from convert_tensor_ref.py:60-108
+  - convert_scalar_ref.py:94: ReduceOp check becomes AssignOp-only
+  - CSE already eliminates the duplicate GEP from separate read+assign
+
+
+NECESSARY (tied to manual-stride lowering)
+==========================================
+
+These exist because the project uses raw pointers + manual stride computation
+instead of memref descriptors + standard MLIR lowering. Replacing any of them
+requires switching the entire lowering strategy.
+
+exo.alloc    - custom memory space allocation (DRAM->malloc, VEC_AVX2->alloca)
+exo.read     - gep + llvm.load with manual stride math (carries explicit sizes)
+exo.assign   - gep + llvm.store with manual stride math (carries explicit sizes)
+exo.window   - gep + cast for sub-views (explicit input/output sizes)
+exo.interval - helper for window index computation, erased after window lowering
+
+
+FILES
+=====
+
+dialects/exo.py                  all 8 (definitions)
+main.py                          all 8 (IR generation)
+rewrites/convert_memref_to_llvm  AllocOp, ReadOp, AssignOp, ReduceOp, WindowOp, IntervalOp
+rewrites/convert_scalar_ref      ReadOp, AssignOp, ReduceOp, AllocOp
+rewrites/convert_tensor_ref      ReadOp, AssignOp, ReduceOp, WindowOp, IntervalOp
+rewrites/inline_avx2             InstrOp (4 patterns)
+rewrites/inline_blas             InstrOp (~50 patterns), ExternOp (1), AllocOp (1)

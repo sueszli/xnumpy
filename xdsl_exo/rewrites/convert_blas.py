@@ -43,8 +43,8 @@ class ConvertFreeOp(RewritePattern):
         rewriter.erase_op(op)
 
 
-class InlineBLASAllocPass(ModulePass):
-    name = "inline-blas-alloc"
+class ConvertBLASAllocPass(ModulePass):
+    name = "convert-blas-alloc"
 
     def apply(self, ctx: Context, m: ModuleOp) -> None:
         PatternRewriteWalker(
@@ -2866,8 +2866,8 @@ class ConvertVecZeroF64x4Pfx(RewritePattern):
         )
 
 
-class InlineBLASPass(ModulePass):
-    name = "inline-blas"
+class ConvertBLASPass(ModulePass):
+    name = "convert-blas"
 
     def apply(self, ctx: Context, m: ModuleOp) -> None:
         PatternRewriteWalker(

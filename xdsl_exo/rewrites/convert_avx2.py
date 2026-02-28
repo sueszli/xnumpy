@@ -124,8 +124,8 @@ class ConvertMM256LoaduPsOp(RewritePattern):
         )
 
 
-class InlineAVX2Pass(ModulePass):
-    name = "inline-avx2"
+class ConvertAVX2Pass(ModulePass):
+    name = "convert-avx2"
 
     def apply(self, ctx: Context, m: ModuleOp) -> None:
         PatternRewriteWalker(

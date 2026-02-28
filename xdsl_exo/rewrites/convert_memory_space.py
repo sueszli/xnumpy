@@ -63,8 +63,8 @@ class ConvertWindowOp(RewritePattern):
         )
 
 
-class InlineMemorySpacePass(ModulePass):
-    name = "inline-memory-space"
+class ConvertMemorySpacePass(ModulePass):
+    name = "convert-memory-space"
 
     def apply(self, ctx: Context, m: ModuleOp) -> None:
         PatternRewriteWalker(GreedyRewritePatternApplier([ConvertWindowOp()])).rewrite_module(m)
