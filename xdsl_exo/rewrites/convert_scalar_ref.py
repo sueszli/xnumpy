@@ -5,7 +5,7 @@ from xdsl.ir import BlockArgument
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 
-from xdsl_exo.dialects import exo, index
+from xdsl_exo.dialects import exo
 
 
 class ConvertRedundantReads(RewritePattern):
@@ -22,7 +22,7 @@ class ConvertRedundantReads(RewritePattern):
 
         # replace index -> x with index cast
         if isinstance(op.input.type, IndexType) and not isinstance(op.result.type, IndexType):
-            rewriter.replace_matched_op(index.CastsOp(op.input, op.result.type))
+            rewriter.replace_matched_op(arith.IndexCastOp(op.input, op.result.type))
 
         if op.input.type == op.result.type and isinstance(op.input, BlockArgument):
             # replace x -> x with x

@@ -31,7 +31,6 @@ from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsP
 from xdsl.utils.scoped_dict import ScopedDict
 
 from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, FreeOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
-from xdsl_exo.dialects.index import Index
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.platforms.avx2 import InlineAVX2Pass
 from xdsl_exo.platforms.blas import InlineBLASAllocPass, InlineBLASPass
@@ -418,7 +417,6 @@ def _context() -> Context:
     ctx.load_dialect(memref.MemRef)
     ctx.load_dialect(scf.Scf)
     ctx.load_dialect(Exo)
-    ctx.load_dialect(Index)
     ctx.load_dialect(LLVMIntrinsics)
     return ctx
 
