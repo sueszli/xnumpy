@@ -7,31 +7,9 @@ name = "xdsl-exo"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "argparse>=1.4.0",
     "exo-lang==1.0.0",
-    "filecheck>=1.0.2",
-    "lit>=18.1.8",
-    "llvmlite>=0.44.0",
-    "matplotlib>=3.10.3",
-    "pandas>=2.2.3",
-    "pulp<2.8",
-    "pytest>=8.3.5",
-    "ruff==0.11.9",
-    "scipy>=1.15.3",
-    "seaborn>=0.13.2",
-    "snakemake>=9.3.4",
     "xdsl==0.57.0",
 ]
 
 [project.scripts]
 xdsl-exo = "xdsl_exo.main:main"
-
-[tool.setuptools.packages.find]
-where = ["."]
-namespaces = true
-
-[tool.pytest.ini_options]
-filterwarnings = ["ignore::pytest.PytestCollectionWarning"]
-
-[tool.ruff.lint]
-ignore = ["F403", "F405", "F821"]
