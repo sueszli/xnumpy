@@ -41,24 +41,6 @@ from xdsl_exo.rewrites.convert_scalar_ref import ConvertScalarRefPass
 from xdsl_exo.rewrites.inline_memory_space import InlineMemorySpacePass
 from xdsl_exo.rewrites.reconcile_index_casts import ReconcileIndexCastsPass
 
-INTEGER_CMP_TABLE = {
-    "==": "eq",
-    "!=": "ne",
-    "<": "slt",
-    "<=": "sle",
-    ">": "sgt",
-    ">=": "sge",
-}
-
-FLOAT_CMP_TABLE = {
-    "==": "oeq",
-    "!=": "one",
-    "<": "olt",
-    "<=": "ole",
-    ">": "ogt",
-    ">=": "oge",
-}
-
 
 class IRGenerator:
     module: ModuleOp
@@ -496,6 +478,23 @@ class IRGenerator:
         return binop.result
 
     def generate_binop_expr_cmp(self, binop):
+        integer_cmp_table = {
+            "==": "eq",
+            "!=": "ne",
+            "<": "slt",
+            "<=": "sle",
+            ">": "sgt",
+            ">=": "sge",
+        }
+        float_cmp_table = {
+            "==": "oeq",
+            "!=": "one",
+            "<": "olt",
+            "<=": "ole",
+            ">": "ogt",
+            ">=": "oge",
+        }
+
         lhs = self.generate_expr(binop.lhs)
         rhs = self.generate_expr(binop.rhs)
 
@@ -511,14 +510,14 @@ class IRGenerator:
                 assert False, f"unknown boolean operator '{binop.op}'"
         # cmpi
         elif lhs.type in [i8, i16, i32, i64]:
-            op = INTEGER_CMP_TABLE[binop.op]
+            op = integer_cmp_table[binop.op]
             if op is None:
                 assert False, f"unknown integer comparison operator '{binop.op}'"
 
             binop = CmpiOp(lhs, rhs, op)
         # cmpf
         else:
-            op = FLOAT_CMP_TABLE[binop.op]
+            op = float_cmp_table[binop.op]
             if op is None:
                 assert False, f"unknown float comparison operator '{binop.op}'"
 
