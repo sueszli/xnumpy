@@ -565,7 +565,6 @@ class IRGenerator:
             self._procedure(proc)
 
         self.module.verify()  # structural only, exo ops don't implement verify_()
-
         return self.module
 
 
