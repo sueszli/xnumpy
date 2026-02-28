@@ -19,9 +19,8 @@ from xdsl.builder import Builder
 from xdsl.context import Context
 from xdsl.dialects import arith, func, memref, scf
 from xdsl.dialects.arith import AddfOp, AddiOp, AndIOp, CmpfOp, CmpiOp, ConstantOp, DivfOp, DivSIOp, FastMathFlagsAttr, MulfOp, MuliOp, NegfOp, OrIOp, RemSIOp, SubfOp, SubiOp
-from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, FunctionType, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, f16, f32, f64, i1, i8, i16, i32, i64
+from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, FunctionType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, f16, f32, f64, i1, i8, i16, i32, i64
 from xdsl.dialects.func import CallOp, FuncOp, ReturnOp
-from xdsl.dialects.memref import CastOp as MemrefCastOp
 from xdsl.dialects.scf import ForOp, IfOp, YieldOp
 from xdsl.ir import Attribute, Block, OpResult, Region, SSAValue
 from xdsl.rewriter import InsertPoint
@@ -31,7 +30,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ExternOp, FreeOp, InstrOp, IntervalOp, ReadOp, ReduceOp, WindowOp
-from xdsl_exo.dialects.extra import CastsOp, Index, LLVMIntrinsics
+from xdsl_exo.dialects.extra import Index, LLVMIntrinsics
 from xdsl_exo.platforms.avx2 import InlineAVX2Pass
 from xdsl_exo.platforms.blas import InlineBLASAllocPass, InlineBLASPass
 from xdsl_exo.rewrites.add_prefix import AddPrefixPass
@@ -82,72 +81,32 @@ class IRGenerator:
             case T.Tensor():
                 inner = self._get_type(t.type)
                 assert inner in {f16, f32, f64, i8, i16, i32}, f"unknown tensor inner type '{inner}'"
-                shape = self._get_static_shape(t)
+                shape = self._shape(t)
                 return MemRefType(inner, shape, NoneAttr(), mem_space)
             case _:
                 assert False, f"unknown type '{t}'"
 
-    def _get_static_shape(self, type) -> list[int]:
+    def _shape(self, type, *, dynamic=False) -> list:
         assert isinstance(type, T.Tensor)
 
-        def attr_from_expr(expr):
-            match expr:
-                case LoopIR.Const():
-                    return expr.val
-                case LoopIR.Read() | LoopIR.BinOp():
-                    return -1
-                case _:
-                    assert False, f"invalid shape argument {expr}"
-
-        return [attr_from_expr(expr) for expr in type.shape()]
-
-    def _get_dynamic_shape(self, type) -> list[SSAValue[Attribute] | int]:
-        assert isinstance(type, T.Tensor)
-
-        def attr_from_expr(expr):
+        def from_expr(expr):
             match expr:
                 case LoopIR.Const():
                     return expr.val
                 case LoopIR.Read():
-                    return self.symbol_table[repr(expr.name)]
+                    return self.symbol_table[repr(expr.name)] if dynamic else -1
                 case LoopIR.BinOp():
-                    return self._binop_expr(expr)
+                    return self._binop_expr(expr) if dynamic else -1
                 case _:
                     assert False, f"invalid shape argument {expr}"
 
-        return [attr_from_expr(expr) for expr in type.shape()]
+        return [from_expr(expr) for expr in type.shape()]
 
     def _sizes_for(self, name) -> list:
         exo_type = self.type_table[repr(name)]
         if isinstance(exo_type, T.Tensor):
-            return self._get_dynamic_shape(exo_type)
+            return self._shape(exo_type, dynamic=True)
         return []
-
-    def _cast_to_index(self, value: SSAValue) -> SSAValue:
-        if isinstance(value.type, IndexType):
-            return value
-        cast = CastsOp(value, IndexType())
-        self.builder.insert(cast)
-        return cast.result
-
-    def _cast_to(self, value: SSAValue, type: Attribute) -> SSAValue:
-        if value.type == type:
-            return value
-
-        if isinstance(type, IndexType) ^ isinstance(value.type, IndexType):
-            cast = CastsOp(value, type)
-            result = cast.result
-
-        elif isinstance(type, MemRefType) and isinstance(value.type, MemRefType):
-            assert type.element_type == value.type.element_type, f"cannot cast from {value.type} to {type} as inner types do not match"
-
-            cast = MemrefCastOp.get(value, type)
-            result = cast.results[0]
-        else:
-            assert False, f"unknown cast from {value.type} to {type}"
-
-        self.builder.insert(cast)
-        return result
 
     #
     # expression generation
@@ -165,7 +124,7 @@ class IRGenerator:
         else:
             assert False, f"unknown type {type} passed to Const"
 
-        const = ConstantOp(attr, self._get_type(const.type))
+        const = ConstantOp(attr, type)
         self.builder.insert(const)
         return const.result
 
@@ -180,13 +139,14 @@ class IRGenerator:
 
     def _usub_expr(self, usub):
         expr = self._expr(usub.arg)
+        type = self._get_type(usub.type)
 
-        if self._get_type(usub.type) in [f16, f32, f64]:
+        if type in [f16, f32, f64]:
             usub = NegfOp(expr)
-        elif self._get_type(usub.type) in [i8, i16, i32, i64]:
-            zero = ConstantOp(IntegerAttr(0, self._get_type(usub.type)))
+        elif type in [i8, i16, i32, i64]:
+            zero = ConstantOp(IntegerAttr(0, type))
             self.builder.insert(zero)
-            usub = SubiOp(zero.result, expr, result_type=self._get_type(usub.type))
+            usub = SubiOp(zero.result, expr, result_type=type)
         else:
             assert False, f"bad type {type} passed to USub"
 
@@ -246,8 +206,8 @@ class IRGenerator:
         input = self.symbol_table[repr(window.name)]
         dest_type = self._get_type(window.type.as_tensor, input.type.memory_space)
 
-        input_sizes = self._get_dynamic_shape(self.type_table[repr(window.name)])
-        output_sizes = self._get_dynamic_shape(window.type.as_tensor)
+        input_sizes = self._shape(self.type_table[repr(window.name)], dynamic=True)
+        output_sizes = self._shape(window.type.as_tensor, dynamic=True)
 
         self.builder.insert(op := WindowOp(input, idx, input_sizes, output_sizes, dest_type))
 
@@ -408,23 +368,13 @@ class IRGenerator:
             return
         self.seen_procs.add(procedure.name)
 
-        def _with_mem_space(ty, arg):
-            if isinstance(ty, MemRefType):
-                return MemRefType(ty.element_type, ty.shape, ty.layout, StringAttr(arg.mem.name()))
-            return ty
+        if procedure.instr is not None:
+            raise NotImplementedError()
 
-        input_types = [_with_mem_space(self._get_type(arg.type), arg) for arg in procedure.args]
-
+        input_types = [MemRefType(ty.element_type, ty.shape, ty.layout, StringAttr(arg.mem.name())) if isinstance(ty := self._get_type(arg.type), MemRefType) else ty for arg in procedure.args]
         func_type = FunctionType.from_lists(input_types, [])
 
-        # instantiate builder at module level
         parent_builder = self.builder
-        module_builder = Builder(insertion_point=InsertPoint.at_end(self.module.body.blocks[0]))
-
-        # generate private funcs for instruction procedures
-        if procedure.instr is not None:
-            return
-
         parent_symbol_table = self.symbol_table
         parent_type_table = self.type_table
         self.symbol_table = ScopedDict[str, SSAValue]()
@@ -444,12 +394,12 @@ class IRGenerator:
             self._stmt(s)
         self.builder.insert(ReturnOp())
 
-        # cleanup
+        # cleanup and insert procedure into module
         self.symbol_table = parent_symbol_table
         self.type_table = parent_type_table
         self.builder = parent_builder
 
-        # insert procedure into module
+        module_builder = Builder(insertion_point=InsertPoint.at_end(self.module.body.blocks[0]))
         module_builder.insert(FuncOp(procedure.name, func_type, Region(block)))
 
     #
@@ -460,7 +410,7 @@ class IRGenerator:
         for proc in procs:
             self._procedure(proc)
 
-        self.module.verify()  # structural only, exo ops don't implement verify_()
+        self.module.verify()
         return self.module
 
 
