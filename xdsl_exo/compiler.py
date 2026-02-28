@@ -91,7 +91,7 @@ class AddPrefixPass(ModulePass):
 
 
 @cache
-def create_context() -> Context:
+def context() -> Context:
     ctx = Context()
     ctx.load_dialect(arith.Arith)
     ctx.load_dialect(Builtin)
@@ -104,8 +104,8 @@ def create_context() -> Context:
     return ctx
 
 
-def transform_xdsl(analyzed_procs: list, target: str = "llvm", prefix: str | None = None) -> ModuleOp:
-    ctx = create_context()
+def transform(analyzed_procs: list, target: str = "llvm", prefix: str | None = None) -> ModuleOp:
+    ctx = context()
     module = IRGenerator().generate(analyzed_procs)
 
     InlineMemorySpacePass().apply(ctx, module)
@@ -166,7 +166,7 @@ def compile_procs(
         return MemoryAnalysis().run(proc)
 
     analyzed_procs = [analyze(proc) for proc in unique_procs]
-    return transform_xdsl(analyzed_procs, target, prefix)
+    return transform(analyzed_procs, target, prefix)
 
 
 def main():
