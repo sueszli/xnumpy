@@ -8,11 +8,12 @@ from typing import ClassVar
 from xdsl.context import Context
 from xdsl.dialects import builtin, memref, ptr
 from xdsl.dialects.builtin import I1, AnyFloatConstr, IntegerAttr, VectorType, i32
-from xdsl.dialects.llvm import LLVMPointerType
+from xdsl.dialects.llvm import FastMathAttr, LLVMPointerType
 from xdsl.ir import Dialect, Operation, SSAValue
-from xdsl.irdl import Attribute, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def
+from xdsl.irdl import Attribute, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, traits_def
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
+from xdsl.traits import Pure, SameOperandsAndResultType
 from xdsl.transforms.convert_memref_to_ptr import ConvertLoadPattern, ConvertStorePattern, ConvertSubviewPattern
 from xdsl.utils.hints import isa
 
@@ -32,6 +33,33 @@ class FAbsOp(IRDLOperation):
 
     def __init__(self, input: Operation | SSAValue, result_type: Attribute):
         super().__init__(operands=[input], result_types=[result_type])
+
+
+@irdl_op_definition
+class FNegOp(IRDLOperation):
+    T: ClassVar = VarConstraint("T", AnyFloatConstr | VectorType.constr(AnyFloatConstr))
+
+    name = "llvm.fneg"
+
+    arg = operand_def(T)
+    res = result_def(T)
+
+    fastmathFlags = prop_def(FastMathAttr, default_value=FastMathAttr(None))
+
+    traits = traits_def(Pure(), SameOperandsAndResultType())
+
+    assembly_format = "$arg attr-dict `:` type($arg)"
+
+    irdl_options = (ParsePropInAttrDict(),)
+
+    def __init__(self, arg: Operation | SSAValue, fast_math: FastMathAttr | None = None):
+        if fast_math is None:
+            fast_math = FastMathAttr(None)
+        super().__init__(
+            operands=[arg],
+            result_types=[SSAValue.get(arg).type],
+            properties={"fastmathFlags": fast_math},
+        )
 
 
 @irdl_op_definition
@@ -66,6 +94,12 @@ class MaskedStoreOp(IRDLOperation):
 LLVMIntrinsics = Dialect(
     "llvm.intr",
     [FAbsOp, MaskedStoreOp],
+    [],
+)
+
+LLVMExtra = Dialect(
+    "llvm",
+    [FNegOp],
     [],
 )
 

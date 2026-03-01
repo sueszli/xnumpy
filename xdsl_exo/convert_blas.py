@@ -2563,16 +2563,11 @@ class ConvertVecNegF32x8(RewritePattern):
 
         rewriter.replace_matched_op(
             (
-                zero_vec_op := arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_float(VectorType(f32, [8]), [0.0] * 8)),
                 load_op := llvm.LoadOp(
                     op.arguments[1],
                     VectorType(f32, [8]),
                 ),
-                # missing llvm.FNeg
-                neg_op := llvm.FSubOp(
-                    zero_vec_op.result,
-                    load_op.dereferenced_value,
-                ),
+                neg_op := llvm_extra.FNegOp(load_op.dereferenced_value),
                 llvm.StoreOp(
                     neg_op.res,
                     op.arguments[0],
@@ -2609,7 +2604,6 @@ class ConvertVecNegF32x8Pfx(RewritePattern):
 
         rewriter.replace_matched_op(
             (
-                zero_vec_op := arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_float(VectorType(f32, [8]), [0.0] * 8)),
                 indices_op := arith.ConstantOp(
                     DenseIntOrFPElementsAttr.create_dense_int(VectorType(i64, [8]), [0, 1, 2, 3, 4, 5, 6, 7]),
                 ),
@@ -2623,11 +2617,7 @@ class ConvertVecNegF32x8Pfx(RewritePattern):
                     IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64),
                 ),
                 load_op := llvm.LoadOp(op.arguments[2], VectorType(f32, [8])),
-                # same as above
-                neg_op := llvm.FSubOp(
-                    zero_vec_op.result,
-                    load_op.dereferenced_value,
-                ),
+                neg_op := llvm_extra.FNegOp(load_op.dereferenced_value),
                 llvm_extra.MaskedStoreOp(
                     neg_op.res,
                     op.arguments[1],
@@ -2660,16 +2650,11 @@ class ConvertVecNegF64x4(RewritePattern):
 
         rewriter.replace_matched_op(
             (
-                zero_vec_op := arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_float(VectorType(f64, [4]), [0.0] * 4)),
                 load_op := llvm.LoadOp(
                     op.arguments[1],
                     VectorType(f64, [4]),
                 ),
-                # same as above
-                neg_op := llvm.FSubOp(
-                    zero_vec_op.result,
-                    load_op.dereferenced_value,
-                ),
+                neg_op := llvm_extra.FNegOp(load_op.dereferenced_value),
                 llvm.StoreOp(
                     neg_op.res,
                     op.arguments[0],
@@ -2707,7 +2692,6 @@ class ConvertVecNegF64x4Pfx(RewritePattern):
 
         rewriter.replace_matched_op(
             (
-                zero_vec_op := arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_float(VectorType(f64, [4]), [0.0] * 4)),
                 indices_op := arith.ConstantOp(
                     DenseIntOrFPElementsAttr.create_dense_int(VectorType(i64, [4]), [0, 1, 2, 3]),
                 ),
@@ -2724,11 +2708,7 @@ class ConvertVecNegF64x4Pfx(RewritePattern):
                     op.arguments[2],
                     VectorType(f64, [4]),
                 ),
-                # same as above
-                neg_op := llvm.FSubOp(
-                    zero_vec_op.result,
-                    load_op.dereferenced_value,
-                ),
+                neg_op := llvm_extra.FNegOp(load_op.dereferenced_value),
                 llvm_extra.MaskedStoreOp(
                     neg_op.res,
                     op.arguments[1],
