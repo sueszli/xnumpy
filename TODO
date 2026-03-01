@@ -1,6 +1,6 @@
 todo:
 
-- now that we have built out this infrastructure, can we get rid of @xdsl_exo/dialects/exo.py entirely by lowering directly?
+- now that we have built out this infrastructure, can we get rid of @xdsl_exo/dialects/exo.py entirely by lowering directly? first figure out what each exo op gets lowered to later from mlir. then skip all unnecessary intermediary steps directly.
 
 ---
 
