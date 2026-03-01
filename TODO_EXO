@@ -11,34 +11,7 @@ better-formed exo ops to prepare for later passes). The order here reflects
 which ops are easiest to eliminate from the codebase one at a time, with each
 step validated by regression tests before moving on.
 
-STEP 1: CONSOLIDATE REWRITE FILES
-====================================
-
-After dropping the last exo op, merge rewrite files that handle
-overlapping concerns. Current file layout in xdsl_exo/rewrites/:
-
-  convert_memref_to_llvm.py — memref.AllocOp (DRAM) → malloc/free
-  convert_blas.py          — VEC_AVX2 dealloc erasure + mm256_* intrinsics → vector/LLVM
-  convert_avx2.py          — mm256_* intrinsics → LLVM (duplicates convert_blas.py)
-  reconcile_index_casts.py — remove redundant arith.index_cast
-  extended_memref_to_ptr.py — memref.cast/reinterpret_cast → ptr ops
-
-Merge candidates:
-
-  a) convert_avx2.py → merge into convert_blas.py
-     Near-complete overlap: both handle mm256_* AVX2 intrinsic lowering.
-
-  b) convert_blas.py + convert_memref_to_llvm.py
-     Both handle memref deallocation, dispatched by memory space
-     (DRAM vs VEC_AVX2). Could become a single alloc-lowering file.
-
-Do this now that exo ops are dropped — the merges will be cleaner.
-
-`make tests` must pass after this step. Update this TODO_EXO file to reflect
-what was done (delete the completed step, renumber remaining steps).
-
-
-STEP 2: SEPARATE UPSTREAM (XDSL) VS LOCAL (THIS REPO) CHANGES
+STEP 1: SEPARATE UPSTREAM (XDSL) VS LOCAL (THIS REPO) CHANGES
 ===============================================================
 
 As we make changes, we need to keep a clean separation between what gets
@@ -76,8 +49,22 @@ This is the current pass ordering:
 
 1. ConvertExternPass          — handle extern calls
 2. ReconcileIndexCastsPass    — clean up index casts
-3. ConvertBLASAllocPass       — dealloc erasure for VEC_AVX2
-4. ConvertAllocFreeToLLVM     — memref.AllocOp → malloc, memref.DeallocOp → free
+3. ConvertAllocFreeToLLVM     — VEC_AVX2 dealloc erasure + DRAM alloc→malloc, dealloc→free
+4. ExtendedConvertMemRefToPtr — memref.{load,store,subview,cast} → ptr ops
+5. ConvertPtrTypeOffsetsPass  — ptr.TypeOffsetOp → arith.constant(sizeof)
+6. ConvertPtrToLLVMPass       — ptr.* → llvm.*
+7. LowerMemRefTypesPass       — MemRefType → LLVMPointerType
+8. ConvertAVX2Pass            — mm256_* intrinsic calls → llvm/vector ops
+9. ConvertBLASPass            — vec_* BLAS intrinsic calls → llvm/vector ops
+10. ConvertScfToCf            — scf → cf
+11. ReconcileUnrealizedCastsPass — remove cast chains
+
+Rewrite files (flat in xdsl_exo/):
+
+  convert_memref_to_llvm.py  — VEC_AVX2 dealloc erasure + DRAM alloc→malloc/free + MemRefType→LLVMPointerType
+  convert_blas.py            — extern select + mm256_* AVX2 intrinsics + vec_* BLAS intrinsics → vector/LLVM
+  reconcile_index_casts.py   — remove redundant arith.index_cast
+  extended_memref_to_ptr.py  — memref.cast/reinterpret_cast → ptr ops
 
 
 SUMMARY: BYPASSING EXO OPS
@@ -94,3 +81,8 @@ To generate MLIR directly and skip exo lowering entirely:
 All exo ops have been eliminated. The exo dialect (xdsl_exo/dialects/exo.py),
 ConvertTensorRefPass (convert_tensor_ref.py), and ConvertMemorySpacePass
 (convert_memory_space.py) have been deleted.
+
+Rewrite file consolidation is complete:
+  - convert_avx2.py merged into convert_blas.py (both lower func.CallOp by callee name)
+  - VEC_AVX2 dealloc erasure (ConvertBLASAllocPass) merged into convert_memref_to_llvm.py
+    (all alloc/dealloc handling in one file, dispatched by memory space)

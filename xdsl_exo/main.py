@@ -33,12 +33,11 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
+from xdsl_exo.convert_blas import ConvertAVX2Pass, ConvertBLASPass, ConvertExternPass
+from xdsl_exo.convert_memref_to_llvm import ConvertAllocFreeToLLVM, LowerMemRefTypesPass
+from xdsl_exo.extended_memref_to_ptr import ExtendedConvertMemRefToPtr
 from xdsl_exo.patches import LLVMIntrinsics
-from xdsl_exo.rewrites.convert_avx2 import ConvertAVX2Pass
-from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass, ConvertExternPass
-from xdsl_exo.rewrites.convert_memref_to_llvm import ConvertAllocFreeToLLVM, LowerMemRefTypesPass
-from xdsl_exo.rewrites.extended_memref_to_ptr import ExtendedConvertMemRefToPtr
-from xdsl_exo.rewrites.reconcile_index_casts import ReconcileIndexCastsPass
+from xdsl_exo.reconcile_index_casts import ReconcileIndexCastsPass
 
 
 class IRGenerator:
@@ -571,8 +570,7 @@ def _transform(analyzed_procs: list) -> ModuleOp:
     module.verify()
 
     # full lowering to llvm dialect
-    ConvertBLASAllocPass().apply(ctx, module)
-    ConvertAllocFreeToLLVM().apply(ctx, module)  # memref.AllocOp → malloc, memref.DeallocOp → free
+    ConvertAllocFreeToLLVM().apply(ctx, module)  # VEC_AVX2 dealloc erasure + DRAM alloc→malloc, dealloc→free
     ExtendedConvertMemRefToPtr().apply(ctx, module)  # memref.{load,store,subview} → ptr.*
     ConvertPtrTypeOffsetsPass().apply(ctx, module)  # ptr.TypeOffsetOp → arith.constant(sizeof)
     ConvertPtrToLLVMPass().apply(ctx, module)  # ptr.* → llvm.*

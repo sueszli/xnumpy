@@ -46,6 +46,19 @@ def compute_memref_strides(
     return ops, strides
 
 
+class EraseVecDeallocOp(RewritePattern):
+    """Erases memref.DeallocOp for VEC_AVX2 memory space (stack-allocated, no free needed)."""
+
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: memref.DeallocOp, rewriter: PatternRewriter):
+        if not isinstance(op.memref.type, MemRefType) or not isinstance(op.memref.type.memory_space, StringAttr):
+            return
+        if op.memref.type.memory_space.data != "VEC_AVX2":
+            return
+
+        rewriter.erase_op(op)
+
+
 class ConvertAllocOp(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.AllocOp, rewriter: PatternRewriter):
@@ -120,6 +133,7 @@ class ConvertAllocFreeToLLVM(ModulePass):
         PatternRewriteWalker(
             GreedyRewritePatternApplier(
                 [
+                    EraseVecDeallocOp(),
                     ConvertAllocOp(),
                     ConvertFreeOp(),
                 ]
