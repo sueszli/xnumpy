@@ -4,7 +4,7 @@ import os
 from argparse import ArgumentParser
 from collections.abc import Sequence
 from contextlib import contextmanager
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 
 from exo.API import Procedure
@@ -17,9 +17,9 @@ from exo.core.LoopIR import LoopIR, T
 from exo.main import get_procs_from_module, load_user_code
 from xdsl.builder import Builder
 from xdsl.context import Context
-from xdsl.dialects import arith, func, memref, ptr, scf
+from xdsl.dialects import arith, func, llvm, memref, ptr, scf
 from xdsl.dialects.arith import AddfOp, AddiOp, AndIOp, CmpfOp, CmpiOp, ConstantOp, DivfOp, DivSIOp, FastMathFlagsAttr, MulfOp, MuliOp, NegfOp, OrIOp, RemSIOp, SubfOp, SubiOp
-from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, FunctionType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, f16, f32, f64, i1, i8, i16, i32, i64
+from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, FunctionType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
 from xdsl.dialects.func import CallOp, FuncOp, ReturnOp
 from xdsl.dialects.scf import ForOp, IfOp, YieldOp
 from xdsl.ir import Attribute, Block, OpResult, Region, SSAValue
@@ -32,7 +32,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ReadOp, WindowOp
+from xdsl_exo.dialects.exo import AssignOp, Exo, ReadOp, WindowOp
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.rewrites.convert_avx2 import ConvertAVX2Pass
 from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass, ConvertExternPass
@@ -344,13 +344,31 @@ class IRGenerator:
         self.builder.insert(ForOp(lo, hi, step.result, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
-        # lower alloc to exo.alloc and register in symbol/type tables
+        # lower alloc to memref.alloc (DRAM) or llvm.alloca (other)
         assert isinstance(alloc, LoopIR.Alloc)
         type = self._type(alloc.type, StringAttr(alloc.mem.name()))
-        self.builder.insert(op := AllocOp(alloc.mem.name(), type))
-        self.symbol_table[repr(alloc.name)] = op.results[0]
+        mem_name = alloc.mem.name()
+        mem_space = StringAttr(mem_name)
+
+        # scalar allocs: wrap as memref<1x...>
+        if not isinstance(type, MemRefType):
+            type = MemRefType(type, [1], NoneAttr(), mem_space)
+
+        if mem_name == "DRAM":
+            self.builder.insert(op := memref.AllocOp.get(type.element_type, shape=type.shape, layout=type.layout, memory_space=mem_space))
+            result = op.memref
+        else:
+            # VEC_AVX2 or other
+            shape = type.get_shape()
+            total_size = reduce(lambda x, y: x * y, shape)
+            self.builder.insert(const_op := arith.ConstantOp(IntegerAttr(total_size, i64)))
+            self.builder.insert(alloc_op := llvm.AllocaOp(const_op.result, type.element_type))
+            self.builder.insert(cast_op := UnrealizedConversionCastOp.get(alloc_op.res, type))
+            result = cast_op.results[0]
+
+        self.symbol_table[repr(alloc.name)] = result
         self.type_table[repr(alloc.name)] = alloc.type
-        return op.result
+        return result
 
     def _free_stmt(self, free):
         # lower free to memref.dealloc
@@ -476,7 +494,7 @@ def _transform(analyzed_procs: list) -> ModuleOp:
     # full lowering to llvm dialect
     ConvertBLASAllocPass().apply(ctx, module)
     ConvertTensorRefPass().apply(ctx, module)  # exo.{read,assign,window} → memref.{load,store,subview}
-    ConvertAllocFreeToLLVM().apply(ctx, module)  # exo.AllocOp → malloc, memref.DeallocOp → free
+    ConvertAllocFreeToLLVM().apply(ctx, module)  # memref.AllocOp → malloc, memref.DeallocOp → free
     ExtendedConvertMemRefToPtr().apply(ctx, module)  # memref.{load,store,subview} → ptr.*
     ConvertPtrTypeOffsetsPass().apply(ctx, module)  # ptr.TypeOffsetOp → arith.constant(sizeof)
     ConvertPtrToLLVMPass().apply(ctx, module)  # ptr.* → llvm.*

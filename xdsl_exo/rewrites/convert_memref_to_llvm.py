@@ -10,8 +10,6 @@ from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, TypeConversionPattern, attr_type_rewrite_pattern, op_type_rewrite_pattern
 from xdsl.rewriter import InsertPoint
 
-from xdsl_exo.dialects import exo
-
 
 def compute_memref_strides(
     sizes: list[SSAValue[Attribute] | int],
@@ -50,23 +48,24 @@ def compute_memref_strides(
 
 class ConvertAllocOp(RewritePattern):
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.AllocOp, rewriter: PatternRewriter):
-        if op.mem.data != "DRAM":
+    def match_and_rewrite(self, op: memref.AllocOp, rewriter: PatternRewriter):
+        memref_type = op.memref.type
+        if not isinstance(memref_type.memory_space, StringAttr):
+            return
+        if memref_type.memory_space.data != "DRAM":
             return
 
-        # require static sized memref
-        assert isinstance(op.result.type, MemRefType)
-        assert all(size != -1 for size in op.result.type.get_shape())
+        assert all(size != -1 for size in memref_type.get_shape())
 
         rewriter.replace_matched_op(
             (
-                const_op := arith.ConstantOp(IntegerAttr(reduce(lambda x, y: x * y, op.result.type.get_shape()), i64)),
+                const_op := arith.ConstantOp(IntegerAttr(reduce(lambda x, y: x * y, memref_type.get_shape()), i64)),
                 alloc_op := llvm.CallOp(
                     "malloc",
                     const_op.result,
                     return_type=llvm.LLVMPointerType(),
                 ),
-                UnrealizedConversionCastOp.get(alloc_op.returned, op.result.type),
+                UnrealizedConversionCastOp.get(alloc_op.returned, memref_type),
             )
         )
 
@@ -97,7 +96,7 @@ class RewriteMemRefTypes(TypeConversionPattern):
 
 
 class ConvertAllocFreeToLLVM(ModulePass):
-    """Converts exo.AllocOp to malloc and memref.DeallocOp to free."""
+    """Converts memref.AllocOp to malloc and memref.DeallocOp to free."""
 
     name = "convert-alloc-free-to-llvm"
 

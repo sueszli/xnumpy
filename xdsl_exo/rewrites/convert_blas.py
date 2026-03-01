@@ -1,35 +1,10 @@
-from functools import reduce
-
 from xdsl.context import Context
 from xdsl.dialects import arith, func, llvm, memref, vector
-from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
+from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, MemRefType, ModuleOp, StringAttr, VectorType, f32, f64, i32, i64
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 
-from xdsl_exo.dialects import exo
 from xdsl_exo.dialects import llvm as llvm_extra
-
-
-class ConvertAllocOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.AllocOp, rewriter: PatternRewriter):
-        if op.mem.data != "VEC_AVX2":
-            return
-
-        assert isinstance(op.result.type, MemRefType), op.result.type
-
-        rewriter.replace_matched_op(
-            (
-                const_op := arith.ConstantOp(
-                    IntegerAttr(
-                        reduce(lambda x, y: x * y, op.result.type.get_shape()),
-                        i64,
-                    )
-                ),
-                alloc_op := llvm.AllocaOp(const_op.result, op.result.type.element_type),
-                UnrealizedConversionCastOp.get(alloc_op.res, op.result.type),
-            )
-        )
 
 
 class ConvertFreeOp(RewritePattern):
@@ -49,7 +24,7 @@ class ConvertBLASAllocPass(ModulePass):
     def apply(self, ctx: Context, m: ModuleOp) -> None:
         PatternRewriteWalker(
             GreedyRewritePatternApplier(
-                [ConvertAllocOp(), ConvertFreeOp()],
+                [ConvertFreeOp()],
             )
         ).rewrite_module(m)
 

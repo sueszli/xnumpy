@@ -29,15 +29,6 @@ class ConvertRedundantReads(RewritePattern):
             rewriter.replace_matched_op((), (op.input,))
 
 
-class ConvertAllocToTensor(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.AllocOp, rewriter: PatternRewriter):
-        if isinstance(op.result.type, MemRefType):
-            return
-
-        rewriter.replace_matched_op(exo.AllocOp(op.mem.data, MemRefType(op.result.type, [1], NoneAttr(), op.mem)))
-
-
 class ConvertReadToTensor(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: exo.ReadOp, rewriter: PatternRewriter):
@@ -111,7 +102,6 @@ class ConvertScalarRefPass(ModulePass):
             GreedyRewritePatternApplier(
                 [
                     ConvertRedundantReads(),
-                    ConvertAllocToTensor(),
                     ConvertReadToTensor(),
                     ConvertAssignToTensor(),
                     ConvertScalarFuncArgsToTensor(),

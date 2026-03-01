@@ -11,30 +11,7 @@ better-formed exo ops to prepare for later passes). The order here reflects
 which ops are easiest to eliminate from the codebase one at a time, with each
 step validated by regression tests before moving on.
 
-STEP 1: DROP exo.alloc (AllocOp)
-=================================
-
-Three lowering paths depending on memory space:
-
-a) DRAM (convert_memory_space.py) → memref.AllocOp
-   Intermediate step: strips memory space string, produces a standard memref.alloc.
-
-b) DRAM (convert_memref_to_llvm.py) → arith.ConstantOp + llvm.CallOp("malloc") + UnrealizedConversionCastOp
-   Final LLVM lowering: computes total element count, calls malloc, casts pointer to memref.
-
-c) VEC_AVX2 (convert_blas.py) → arith.ConstantOp + llvm.AllocaOp + UnrealizedConversionCastOp
-   Stack-allocates AVX2 vector storage via alloca.
-
-To skip exo.alloc:
-  - For DRAM: emit memref.AllocOp directly with the right element type, shape, and layout.
-    Or go straight to LLVM: emit arith.constant(num_elements) → llvm.call @malloc → unrealized_conversion_cast.
-  - For VEC_AVX2: emit arith.constant(num_elements) → llvm.alloca → unrealized_conversion_cast.
-
-`make tests` must pass after this step. Update this TODO_EXO file to reflect
-what was done (delete the completed step, renumber remaining steps).
-
-
-STEP 2: DROP exo.read (ReadOp)
+STEP 1: DROP exo.read (ReadOp)
 ===============================
 
 Two lowering paths:
@@ -56,7 +33,7 @@ To skip exo.read:
 what was done (delete the completed step, renumber remaining steps).
 
 
-STEP 3: DROP exo.assign (AssignOp)
+STEP 2: DROP exo.assign (AssignOp)
 ===================================
 
 Two lowering paths:
@@ -79,7 +56,7 @@ To skip exo.assign:
 what was done (delete the completed step, renumber remaining steps).
 
 
-STEP 4: DROP exo.window (WindowOp)
+STEP 3: DROP exo.window (WindowOp)
 ===================================
 
 Two lowering paths:
@@ -103,17 +80,17 @@ To skip exo.window:
 what was done (delete the completed step, renumber remaining steps).
 
 
-STEP 5: CONSOLIDATE REWRITE FILES
+STEP 4: CONSOLIDATE REWRITE FILES
 ====================================
 
-After steps 1-4 shrink the exo dialect, merge rewrite files that handle
+After steps 1-3 shrink the exo dialect, merge rewrite files that handle
 overlapping concerns. Current file layout in xdsl_exo/rewrites/:
 
   convert_tensor_ref.py    — exo read/assign/window → memref ops
   convert_scalar_ref.py    — scalar exo read/assign → 1-D memref wrappers
-  convert_memory_space.py  — DRAM memory space on alloc/window → memref.alloc
-  convert_memref_to_llvm.py — exo alloc (DRAM) → malloc/free
-  convert_blas.py          — exo alloc (VEC_AVX2) + mm256_* intrinsics → vector/LLVM
+  convert_memory_space.py  — memory space propagation on window
+  convert_memref_to_llvm.py — memref.AllocOp (DRAM) → malloc/free
+  convert_blas.py          — VEC_AVX2 dealloc erasure + mm256_* intrinsics → vector/LLVM
   convert_avx2.py          — mm256_* intrinsics → LLVM (duplicates convert_blas.py)
   reconcile_index_casts.py — remove redundant arith.index_cast
   extended_memref_to_ptr.py — memref.cast/reinterpret_cast → ptr ops
@@ -125,15 +102,15 @@ Merge candidates:
 
   b) convert_tensor_ref.py + convert_scalar_ref.py → single file
      Both handle exo.ReadOp and exo.AssignOp, just for different shapes.
-     After dropping the exo ops (steps 2-3) these may naturally collapse.
+     After dropping the exo ops (steps 1-2) these may naturally collapse.
 
   c) convert_memory_space.py + convert_memref_to_llvm.py → single file
      Sequential stages of the same pipeline: memory space annotation →
-     malloc/free lowering. Both deal with exo.AllocOp for DRAM.
+     malloc/free lowering.
 
   d) convert_blas.py + convert_memref_to_llvm.py (after merge c)
-     Both convert exo.AllocOp and memref.DeallocOp, dispatched by memory
-     space (DRAM vs VEC_AVX2). Could become a single alloc-lowering file.
+     Both handle memref deallocation, dispatched by memory space
+     (DRAM vs VEC_AVX2). Could become a single alloc-lowering file.
 
 Do this after dropping exo ops — the merges will be cleaner once there are
 fewer ops to route between files.
@@ -142,10 +119,10 @@ fewer ops to route between files.
 what was done (delete the completed step, renumber remaining steps).
 
 
-STEP 6: SEPARATE UPSTREAM (XDSL) VS LOCAL (THIS REPO) CHANGES
+STEP 5: SEPARATE UPSTREAM (XDSL) VS LOCAL (THIS REPO) CHANGES
 ===============================================================
 
-As we make changes throughout steps 1-4, we need to keep a clean separation
+As we make changes throughout steps 1-3, we need to keep a clean separation
 between what gets merged upstream into xDSL and what stays in this repository.
 
 Upstream to xDSL: general-purpose MLIR ops and infrastructure that xDSL is
@@ -175,13 +152,13 @@ PIPELINE ORDER (from main.py, for reference)
 
 This is the current pass ordering, NOT the recommended drop order:
 
-1. ConvertMemorySpacePass     — propagate memory spaces on alloc/window
+1. ConvertMemorySpacePass     — propagate memory spaces on window
 2. ConvertScalarRefPass       — handle scalar reads/assigns
 3. ConvertExternPass          — handle extern calls
 4. ReconcileIndexCastsPass    — clean up index casts
-5. ConvertBLASAllocPass       — alloc for VEC_AVX2
+5. ConvertBLASAllocPass       — dealloc erasure for VEC_AVX2
 6. ConvertTensorRefPass       — read/assign/window → memref ops
-7. ConvertAllocFreeToLLVM     — alloc → malloc/alloca
+7. ConvertAllocFreeToLLVM     — memref.AllocOp → malloc, memref.DeallocOp → free
 
 
 SUMMARY: BYPASSING EXO OPS
@@ -190,7 +167,7 @@ SUMMARY: BYPASSING EXO OPS
 To generate MLIR directly and skip exo lowering entirely:
 
   exo.invert_window → deleted (done)
-  exo.alloc         → memref.alloc (or llvm.call @malloc for LLVM-level)
+  exo.alloc         → dropped (done) — DRAM emits memref.AllocOp, VEC_AVX2 emits llvm.AllocaOp directly
   exo.read          → arith.index_cast per index + memref.load (or SSA forwarding)
   exo.assign        → arith.index_cast per index + memref.store
   exo.window        → stride/offset math + memref.subview with StridedLayoutAttr

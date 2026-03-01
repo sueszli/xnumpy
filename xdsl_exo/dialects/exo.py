@@ -2,32 +2,11 @@ from collections.abc import Sequence
 from typing import ClassVar
 
 from xdsl.dialects import memref
-from xdsl.dialects.builtin import DenseArrayBase, MemRefType, StringAttr, i64
+from xdsl.dialects.builtin import DenseArrayBase, MemRefType, i64
 from xdsl.dialects.utils import split_dynamic_index_list
 from xdsl.ir import Dialect, Operation, SSAValue
 from xdsl.irdl import AnyAttr, Attribute, AttrSizedOperandSegments, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, var_operand_def
 from xdsl.printer import Printer
-
-
-@irdl_op_definition
-class AllocOp(IRDLOperation):
-    name = "exo.alloc"
-
-    result = result_def()
-    mem = prop_def(StringAttr)
-
-    assembly_format = "$mem attr-dict `:` type($result)"
-
-    def __init__(
-        self,
-        mem: str,
-        result_type: MemRefType,
-    ) -> None:
-        super().__init__(
-            operands=[],
-            result_types=[result_type],
-            properties={"mem": StringAttr(mem)},
-        )
 
 
 @irdl_op_definition
@@ -157,7 +136,6 @@ class WindowOp(IRDLOperation):
 Exo = Dialect(
     "exo",
     [
-        AllocOp,
         AssignOp,
         ReadOp,
         WindowOp,
