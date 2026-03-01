@@ -1,16 +1,3 @@
-(1) get rid of llvm dialect
-
-- https://github.com/xdslproject/xdsl/pull/5683
-- https://github.com/xdslproject/xdsl/pull/5684
-
-(2) get rid of exo dialect
-
-- https://github.com/xdslproject/xdsl/pull/4371 (not merged yet! needs to be redone) -> attempt to add lowering for `memref.reinterpret_cast` and `memref.cast` in the upstream `convert-memref-to-ptr` pass. building block for the larger effort below.
-    - `memref.subview`: https://mlir.llvm.org/docs/Dialects/MemRef/#memrefsubview-memrefsubviewop
-    - `memref.reinterpret_cast`: https://mlir.llvm.org/docs/Dialects/MemRef/#memrefreinterpret_cast-memrefreinterpretcastop
-
----
-
 option A: raw pointers (current, single-stage)
 
 `ConvertMemRefToLLVM` goes directly from exo ops to LLVM pointer arithmetic in one step.
@@ -58,3 +45,19 @@ goals
 - match upstream MLIR conventions for merging with xdsl
 
 longer-term: exo emits LLVM IR (not just C), xdsl gets proper memref descriptor support, compile exo → xdsl → llvmlite and benchmark real workloads
+
+
+# prs
+
+llvm dialect
+
+- https://github.com/xdslproject/xdsl/pull/5683
+- https://github.com/xdslproject/xdsl/pull/5684
+
+exo dialect
+
+- https://github.com/xdslproject/xdsl/pull/4371
+    - needs to be redone
+    - attempts to add lowering for `memref.reinterpret_cast` and `memref.cast` in the upstream `convert-memref-to-ptr` pass
+    - `memref.subview`: https://mlir.llvm.org/docs/Dialects/MemRef/#memrefsubview-memrefsubviewop
+    - `memref.reinterpret_cast`: https://mlir.llvm.org/docs/Dialects/MemRef/#memrefreinterpret_cast-memrefreinterpretcastop
