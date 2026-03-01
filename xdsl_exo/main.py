@@ -143,7 +143,6 @@ class IRGenerator:
         sizes = self._shape(exo_type, dynamic=True) if isinstance(exo_type, T.Tensor) else []
 
         self.builder.insert(op := ReadOp(operand, idx, sizes, result_type=self._type(read.type)))
-
         return op.result
 
     def _usub_expr(self, usub):
