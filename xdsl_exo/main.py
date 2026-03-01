@@ -56,7 +56,7 @@ class IRGenerator:
 
     @contextmanager
     def _tmp_state(self, *, inherit=True):
-        # saves state, restores on exit
+        # save and restore builder/symbol/type state across nested scopes
         parent_builder = self.builder
         parent_symbol_table = self.symbol_table
         parent_type_table = self.type_table
@@ -71,6 +71,7 @@ class IRGenerator:
             self.type_table = parent_type_table
 
     def _type(self, exo_type, mem_space: StringAttr | None = None) -> Attribute:
+        # map exo type (T.F32, T.Tensor, etc.) to mlir type (f32, memref, etc.)
         match exo_type:
             case SSAValue():
                 return exo_type.type
@@ -100,6 +101,7 @@ class IRGenerator:
                 assert False
 
     def _shape(self, tensor, *, dynamic=False) -> list:
+        # extract tensor dimensions as ints (static) or ssa values (dynamic)
         assert isinstance(tensor, T.Tensor)
 
         def from_expr(expr):
@@ -119,6 +121,7 @@ class IRGenerator:
         return [from_expr(expr) for expr in tensor.shape()]
 
     def _const_expr(self, const):
+        # lower LoopIR literal to arith.constant op
         assert isinstance(const, LoopIR.Const)
         type = self._type(const.type)
 
@@ -136,6 +139,7 @@ class IRGenerator:
         return const.result
 
     def _read_expr(self, read):
+        # lower LoopIR read (scalar or indexed tensor) to exo.read op
         assert isinstance(read, LoopIR.Read)
         idx = [self._expr(e) for e in read.idx]
         operand = self.symbol_table[repr(read.name)]
@@ -146,6 +150,7 @@ class IRGenerator:
         return op.result
 
     def _usub_expr(self, usub):
+        # lower unary negation to negf (float) or 0-x subi (int)
         assert isinstance(usub, LoopIR.USub)
         expr = self._expr(usub.arg)
         type = self._type(usub.type)
@@ -163,6 +168,7 @@ class IRGenerator:
         return usub.result
 
     def _binop_expr(self, binop):
+        # lower binary op to typed arith op; delegates to _binop_expr_cmp for i1
         assert isinstance(binop, LoopIR.BinOp)
         type = self._type(binop.type)
         if type == i1:
@@ -187,6 +193,7 @@ class IRGenerator:
         return op.result
 
     def _binop_expr_cmp(self, binop):
+        # lower comparison/logical binop to cmpi, cmpf, andi, or ori
         assert isinstance(binop, LoopIR.BinOp)
         integer_cmp_table = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
         float_cmp_table = {"==": "oeq", "!=": "one", "<": "olt", "<=": "ole", ">": "ogt", ">=": "oge"}
@@ -212,8 +219,19 @@ class IRGenerator:
         return binop.result
 
     def _window_expr(self, window):
+        # lower window expression to exo.window subview op
         assert isinstance(window, LoopIR.WindowExpr)
-        idx = [self._w_access(w_access) for w_access in window.idx]
+
+        def w_access(w):
+            match w:
+                case LoopIR.Point():
+                    return self._expr(w.pt)
+                case LoopIR.Interval():
+                    return self._expr(w.lo)
+                case _:
+                    assert False
+
+        idx = [w_access(w) for w in window.idx]
 
         input = self.symbol_table[repr(window.name)]
         dest_type = self._type(window.type.as_tensor, input.type.memory_space)
@@ -225,16 +243,8 @@ class IRGenerator:
 
         return op.result
 
-    def _w_access(self, w_access):
-        match w_access:
-            case LoopIR.Point():
-                return self._expr(w_access.pt)
-            case LoopIR.Interval():
-                return self._expr(w_access.lo)
-            case _:
-                assert False
-
     def _extern_expr(self, extern):
+        # lower extern function call to func.call with return value
         assert isinstance(extern, LoopIR.Extern)
         output_type = self._type(extern.f.typecheck(extern.args))
         args = [self._expr(e) for e in extern.args]
@@ -242,6 +252,7 @@ class IRGenerator:
         return op.res[0]
 
     def _expr(self, expr) -> OpResult | SSAValue:
+        # dispatch loopir expression node to its typed lowering method
         match expr:
             case LoopIR.Read():
                 return self._read_expr(expr)
@@ -259,6 +270,7 @@ class IRGenerator:
                 assert False
 
     def _store_stmt(self, stmt):
+        # lower assignment to exo.assign (store value into buffer)
         assert isinstance(stmt, LoopIR.Assign)
         idx = [self._expr(e) for e in stmt.idx]
         value = self._expr(stmt.rhs)
@@ -268,6 +280,7 @@ class IRGenerator:
         self.builder.insert(AssignOp(value, memref, idx, sizes))
 
     def _reduce_stmt(self, stmt):
+        # lower reduce to read + add + assign (accumulate into buffer)
         assert isinstance(stmt, LoopIR.Reduce)
         idx = [self._expr(e) for e in stmt.idx]
         value = self._expr(stmt.rhs)
@@ -284,6 +297,7 @@ class IRGenerator:
         self.builder.insert(AssignOp(add_op.result, memref_val, idx, sizes))
 
     def _if_stmt(self, if_stmt):
+        # lower if/else to scf.if with true and false regions
         assert isinstance(if_stmt, LoopIR.If)
         cond = self._expr(if_stmt.cond)
 
@@ -305,6 +319,7 @@ class IRGenerator:
         self.builder.insert(IfOp(cond, [], Region(true_block), Region(false_block)))
 
     def _for_stmt(self, for_stmt):
+        # lower for loop to scf.for with lo/hi bounds and step=1
         assert isinstance(for_stmt, LoopIR.For)
         lo = self._expr(for_stmt.lo)
         hi = self._expr(for_stmt.hi)
@@ -332,6 +347,7 @@ class IRGenerator:
         self.builder.insert(ForOp(lo, hi, step.result, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
+        # lower alloc to exo.alloc and register in symbol/type tables
         assert isinstance(alloc, LoopIR.Alloc)
         type = self._type(alloc.type, StringAttr(alloc.mem.name()))
         self.builder.insert(op := AllocOp(alloc.mem.name(), type))
@@ -340,11 +356,13 @@ class IRGenerator:
         return op.result
 
     def _free_stmt(self, free):
+        # lower free to memref.dealloc
         assert isinstance(free, LoopIR.Free)
         # memory space is already on the memref type, so standard memref.dealloc suffices
         self.builder.insert(memref.DeallocOp.get(self.symbol_table[repr(free.name)]))
 
     def _call_stmt(self, call):
+        # lower call to func.call; emits extern decl for intrinsics, recurses for procs
         assert isinstance(call, LoopIR.Call)
         # lower all args to ssa values
         args = [self._expr(arg) for arg in call.args]
@@ -366,6 +384,7 @@ class IRGenerator:
         self.builder.insert(CallOp(call.f.name, args, []))
 
     def _stmt(self, stmt):
+        # dispatch loopir statement node to its typed lowering method
         match stmt:
             case LoopIR.Assign():
                 self._store_stmt(stmt)
@@ -391,6 +410,7 @@ class IRGenerator:
                 assert False
 
     def _procedure(self, procedure):
+        # lower loopir proc to func.func with fresh symbol/type scope
         assert isinstance(procedure, LoopIR.proc)
         if procedure.name in self.seen_procs:
             return
@@ -421,6 +441,7 @@ class IRGenerator:
         module_builder.insert(FuncOp(procedure.name, func_type, Region(block)))
 
     def generate(self, procs) -> ModuleOp:
+        # lower all loopir procs into the module and return it
         for proc in procs:
             self._procedure(proc)
         return self.module
