@@ -33,7 +33,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.convert_blas import ConvertAVX2Pass, ConvertBLASPass, ConvertExternPass
+from xdsl_exo.convert_blas import ConvertExternPass, ConvertIntrinsicsPass
 from xdsl_exo.convert_memref_to_llvm import ConvertAllocFreeToLLVM, LowerMemRefTypesPass
 from xdsl_exo.patches import ExtendedConvertMemRefToPtr, LLVMIntrinsics
 
@@ -572,8 +572,7 @@ def _transform(analyzed_procs: list) -> ModuleOp:
     ConvertPtrTypeOffsetsPass().apply(ctx, module)  # ptr.TypeOffsetOp → arith.constant(sizeof)
     ConvertPtrToLLVMPass().apply(ctx, module)  # ptr.* → llvm.*
     LowerMemRefTypesPass().apply(ctx, module)  # MemRefType → LLVMPointerType
-    ConvertAVX2Pass().apply(ctx, module)  # mm256_* intrinsic calls → llvm/vector ops
-    ConvertBLASPass().apply(ctx, module)  # vec_* BLAS intrinsic calls → llvm/vector ops
+    ConvertIntrinsicsPass().apply(ctx, module)  # mm256_*/vec_* intrinsic calls → llvm/vector ops
     ConvertScfToCf().apply(ctx, module)  # scf → cf
     ReconcileUnrealizedCastsPass().apply(ctx, module)  # remove unrealized cast chains
     module.verify()

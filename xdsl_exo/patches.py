@@ -97,13 +97,6 @@ LLVMIntrinsics = Dialect(
     [],
 )
 
-LLVMExtra = Dialect(
-    "llvm",
-    [FNegOp],
-    [],
-)
-
-
 #
 # ConvertMemRefToPtr extensions
 #
@@ -135,12 +128,6 @@ class ConvertReinterpretCastOp(RewritePattern):
 
 @dataclass(frozen=True)
 class ExtendedConvertMemRefToPtr(ModulePass):
-    """
-    Extended ConvertMemRefToPtr — adds memref.cast and memref.reinterpret_cast
-    support on top of upstream ConvertStorePattern, ConvertLoadPattern,
-    ConvertSubviewPattern. To be upstreamed into xDSL's convert_memref_to_ptr.
-    """
-
     name = "extended-convert-memref-to-ptr"
 
     def apply(self, ctx: Context, op: builtin.ModuleOp) -> None:
