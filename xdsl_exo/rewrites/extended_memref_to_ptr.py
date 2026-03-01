@@ -1,5 +1,4 @@
-# Remove this file once PR is merged and use the upstream pass directly.
-# See: https://github.com/xdslproject/xdsl/pull/4371
+# monkey patch. merge this upstream
 
 from dataclasses import dataclass
 
@@ -38,7 +37,7 @@ class ConvertReinterpretCastOp(RewritePattern):
 @dataclass(frozen=True)
 class ExtendedConvertMemRefToPtr(ModulePass):
     """
-    Upstream ConvertMemRefToPtr + PR #4371 patterns (CastOp, ReinterpretCastOp).
+    monkey patched ConvertMemRefToPtr
     """
 
     name = "extended-convert-memref-to-ptr"
