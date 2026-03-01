@@ -35,8 +35,7 @@ from xdsl.utils.scoped_dict import ScopedDict
 
 from xdsl_exo.convert_blas import ConvertAVX2Pass, ConvertBLASPass, ConvertExternPass
 from xdsl_exo.convert_memref_to_llvm import ConvertAllocFreeToLLVM, LowerMemRefTypesPass
-from xdsl_exo.extended_memref_to_ptr import ExtendedConvertMemRefToPtr
-from xdsl_exo.patches import LLVMIntrinsics
+from xdsl_exo.patches import ExtendedConvertMemRefToPtr, LLVMIntrinsics
 from xdsl_exo.reconcile_index_casts import ReconcileIndexCastsPass
 
 
