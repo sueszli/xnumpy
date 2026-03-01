@@ -30,7 +30,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, IntervalOp, ReadOp, WindowOp
+from xdsl_exo.dialects.exo import AllocOp, AssignOp, Exo, ReadOp, WindowOp
 from xdsl_exo.dialects.llvm import LLVMIntrinsics
 from xdsl_exo.rewrites.convert_avx2 import ConvertAVX2Pass
 from xdsl_exo.rewrites.convert_blas import ConvertBLASAllocPass, ConvertBLASPass, ConvertExternPass
@@ -230,10 +230,7 @@ class IRGenerator:
             case LoopIR.Point():
                 return self._expr(w_access.pt)
             case LoopIR.Interval():
-                lo = self._expr(w_access.lo)
-                hi = self._expr(w_access.hi)
-                self.builder.insert(op := IntervalOp(lo, hi))
-                return op.result
+                return self._expr(w_access.lo)
             case _:
                 assert False
 

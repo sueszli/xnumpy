@@ -1,47 +1,46 @@
-wait for these to merge
+## get rid of llvm dialect
+
+see
 
 - https://github.com/xdslproject/xdsl/pull/5683
 - https://github.com/xdslproject/xdsl/pull/5684
 
-minimize code
+## get rid of exo dialect (requires tensor lowering)
 
-- see: https://github.com/sueszli/aziz-lang/blob/main/aziz-lang-tiny/main.py
-- "@proc annotated functions -> llvm dialect in mlir" not possible because Exo has concepts that don't map 1:1 to standard MLIR dialects. but try as hard as possible
-
-
-
-## goal
-
-fix memref lowering
+see
 
 - https://github.com/xdslproject/xdsl/pull/4371/changes
 - https://mlir.llvm.org/docs/Dialects/MemRef/#memrefsubview-memrefsubviewop
 - https://mlir.llvm.org/docs/Dialects/MemRef/#memrefreinterpret_cast-memrefreinterpretcastop
 
-- (a) lower to pointers (pretend you dont have permission) → infer offset (between inner and outer offset)
-- (b) lower to struct (pointer to inner data, shape, offset, stride) → more popular
-
-- one of the steps in the translation is going from memrefs to pointers. the way it is is not good.
-- not sure if one is better than the other. compare them. eval correctness.
-- do pointer arithmetic at creation, so reads are faster and its compatible with xdsl when we want to merge upstream.
-- if the offset is in the type, inversion is trivial, because you just negate the offset to go back. otherwise panic (this happens for some ops, this is out of scope for now).
-- would need some upstream changes to exo and xdsl, exo team might be open to it.
-    - for exo: emit llvm ir from exo (in addition to c)
-    - for xdsl: reimplement exo in xdsl?
-
-hook that up to llvmlite using xdsl then we could compare real linear algebra things
-
-
----
-
-
 option a: raw pointers (current)
 
-- functions take raw pointers. array access is ptr + offset via manual stride math.
-- exo.read → cast memref to ptr → gep(ptr, i*stride0 + j*stride1) → llvm.load
+- functions take raw pointers. array access is ptr + offset via manual stride math
+- `exo.read %buf[i, j]` → `ptr = cast(buf)` → `gep(ptr, i*stride0 + j*stride1)` → `llvm.load`
+- problem: the offset is baked into the pointer itself. when you do `exo.window` (subview), it computes a new pointer via GEP and casts it back to a memref, but the offset information is lost. you can't recover it later, which means:
+    - you can't invert a window operation (go from inner view back to the outer one) unless the offset is statically known in the type
+    - it's incompatible with standard MLIR memref semantics, making upstream merging with xdsl harder
+- if the offset is in the type, inversion is trivial, because you just negate the offset to go back. otherwise panic (this happens for some ops, this is out of scope for now).
 
 option b: memref descriptors (standard mlir)
 
-- functions take descriptor structs {base_ptr, offset, sizes[], strides[]}.
-- memref.load → extract ptr from descriptor → gep(ptr, linearized offset) → llvm.load
+- functions take descriptor structs `{base_ptr, offset, sizes[], strides[]}`.
+- `memref.load` → extract ptr from descriptor → gep(ptr, linearized offset) → llvm.load
+- code for this approach already exists in `convert_tensor_ref.py` (using memref.load/store/subview) but is not wired into the pipeline.
+  - keeps offset/stride metadata alongside the pointer
+  - makes subview/window trivially invertible (negate the offset)
+  - matches what upstream xdsl/MLIR expects
 
+what PR #4371 does
+
+- this is a building block for the larger effort.
+- it's a small upstream xdsl PR that adds lowering for `memref.reinterpret_cast` and `memref.cast` in the `convert-memref-to-ptr` pass
+- `reinterpret_cast` is lowered to `ptr.ToPtrOp` + `UnrealizedConversionCastOp`, and plain cast is just erased (it's a type-level no-op).
+
+## goals
+
+- do pointer arithmetic at creation time (window/subview), so reads are just load(base_ptr + pre-computed offset) — faster reads
+- track offsets explicitly so inversion is possible (when offset is in the type, just negate it; otherwise panic for now)
+- match upstream MLIR conventions to enable merging with xdsl and eventually hooking into llvmlite for real linear algebra benchmarks
+
+longer-term vision: Exo emits LLVM IR (not just C), xdsl gets proper memref descriptor support, and you can compile Exo → xdsl → llvmlite and benchmark real workloads.

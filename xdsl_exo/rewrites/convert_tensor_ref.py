@@ -16,7 +16,6 @@ alternative memref based implementation
 - ConvertReadOp — exo.ReadOp → memref.LoadOp
 - ConvertAssignOp — exo.AssignOp → memref.StoreOp
 - ConvertWindowOp — exo.WindowOp → memref.SubviewOp (with stride/offset computation)
-- EraseUnusedIntervalOp — cleans up leftover exo.IntervalOps with no uses
 """
 
 
@@ -107,10 +106,6 @@ def compute_memref_offsets(
         if isinstance(stride, int):
             stride = arith.ConstantOp(IntegerAttr(stride, i64)).result
             ops.append(stride.op)
-
-        # multiply
-        if isinstance(idx.owner, exo.IntervalOp):
-            idx = idx.owner.start
 
         mul_op = arith.MuliOp(operand1=idx, operand2=stride)
         ops.append(mul_op)
@@ -215,14 +210,6 @@ class ConvertWindowOp(RewritePattern):
         )
 
 
-class EraseUnusedIntervalOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.IntervalOp, rewriter: PatternRewriter):
-        # erase unused interval ops
-        if len(op.result.uses) == 0:
-            rewriter.erase_op(op)
-
-
 class ConvertTensorRefPass(ModulePass):
     name = "convert-tensor-ref"
 
@@ -233,7 +220,6 @@ class ConvertTensorRefPass(ModulePass):
                     ConvertReadOp(),
                     ConvertAssignOp(),
                     ConvertWindowOp(),
-                    EraseUnusedIntervalOp(),
                 ]
             )
         ).rewrite_module(m)

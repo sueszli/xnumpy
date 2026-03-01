@@ -1,14 +1,12 @@
 from collections.abc import Sequence
-from typing import ClassVar, TypeAlias
+from typing import ClassVar
 
 from xdsl.dialects import memref
-from xdsl.dialects.builtin import DenseArrayBase, MemRefType, StringAttr, TupleType, i64
+from xdsl.dialects.builtin import DenseArrayBase, MemRefType, StringAttr, i64
 from xdsl.dialects.utils import split_dynamic_index_list
 from xdsl.ir import Dialect, Operation, SSAValue
 from xdsl.irdl import AnyAttr, Attribute, AttrSizedOperandSegments, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, var_operand_def
 from xdsl.printer import Printer
-
-IntervalType: TypeAlias = TupleType
 
 
 @irdl_op_definition
@@ -115,27 +113,6 @@ class ReadOp(IRDLOperation):
 
 
 @irdl_op_definition
-class IntervalOp(IRDLOperation):
-    name = "exo.interval"
-
-    start = operand_def(i64)
-    end = operand_def(i64)
-    result = result_def(IntervalType)
-
-    assembly_format = "$start `,` $end attr-dict `:` type($result)"
-
-    def __init__(
-        self,
-        start: SSAValue | Operation,
-        end: SSAValue | Operation,
-    ) -> None:
-        super().__init__(
-            operands=[SSAValue.get(start), SSAValue.get(end)],
-            result_types=[TupleType([start.type, end.type])],
-        )
-
-
-@irdl_op_definition
 class WindowOp(IRDLOperation):
     T: ClassVar = VarConstraint("T", AnyAttr())
 
@@ -184,7 +161,6 @@ Exo = Dialect(
         AssignOp,
         ReadOp,
         WindowOp,
-        IntervalOp,
     ],
     [],
 )

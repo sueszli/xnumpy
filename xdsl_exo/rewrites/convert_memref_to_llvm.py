@@ -64,9 +64,6 @@ def compute_memref_offsets(
         else:
             stride_val = stride
 
-        if isinstance(idx.owner, exo.IntervalOp):
-            idx = idx.owner.start
-
         mul_op = arith.MuliOp(operand1=idx, operand2=stride_val)
         ops.append(mul_op)
         offsets.append(mul_op.result)
@@ -230,15 +227,6 @@ class RewriteMemRefTypes(TypeConversionPattern):
         return llvm.LLVMPointerType()
 
 
-class EraseIntervalOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: exo.IntervalOp, rewriter: PatternRewriter):
-        if len(op.result.uses) != 0:
-            return
-
-        rewriter.erase_op(op)
-
-
 class ConvertMemRefToLLVM(ModulePass):
     name = "convert-memref-to-llvm"
 
@@ -275,7 +263,6 @@ class ConvertMemRefToLLVM(ModulePass):
                     ConvertAssignOp(),
                     ConvertWindowOp(),
                     RewriteMemRefTypes(),
-                    EraseIntervalOp(),
                 ]
             ),
         ).rewrite_module(m)
