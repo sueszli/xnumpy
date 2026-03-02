@@ -4,7 +4,7 @@ from functools import reduce
 from xdsl.builder import Builder
 from xdsl.context import Context
 from xdsl.dialects import arith, func, llvm, memref, vector
-from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, Float32Type, IndexType, IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
+from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IndexType, IntegerAttr, MemRefType, ModuleOp, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, TypeConversionPattern, attr_type_rewrite_pattern, op_type_rewrite_pattern
 from xdsl.rewriter import InsertPoint
@@ -45,41 +45,37 @@ def _mask_f64x4(m):
 #
 # core operation builders
 #
-# each takes (op, vt, pfx) and returns (ops_list, result_value, dst_ptr).
-# for pfx variants, argument indices shift by 1 (arg[0] is mask threshold m).
+# each takes (args, vt) and returns (ops_list, result_value, dst_ptr).
+# args is pre-sliced: args[0] is dst, args[1..] are sources.
 #
 
 
-def _build_identity(op, vt, pfx):
-    off = 1 if pfx else 0
-    load = llvm.LoadOp(op.arguments[off + 1], vt)
-    return [load], load.dereferenced_value, op.arguments[off]
+def _build_identity(args, vt):
+    load = llvm.LoadOp(args[1], vt)
+    return [load], load.dereferenced_value, args[0]
 
 
-def _build_abs(op, vt, pfx):
-    off = 1 if pfx else 0
-    dst, src = op.arguments[off], op.arguments[off + 1]
+def _build_abs(args, vt, *, prefixed=False):
+    dst, src = args[0], args[1]
     load = llvm.LoadOp(src, vt)
     fabs = llvm_extra.FAbsOp(load.dereferenced_value, vt)
-    if pfx:
+    if prefixed:
         return [load, fabs, llvm.StoreOp(load.dereferenced_value, dst)], fabs.result, dst
     return [load, fabs], fabs.result, dst
 
 
-def _build_neg(op, vt, pfx):
-    off = 1 if pfx else 0
-    load = llvm.LoadOp(op.arguments[off + 1], vt)
+def _build_neg(args, vt):
+    load = llvm.LoadOp(args[1], vt)
     neg = llvm_extra.FNegOp(load.dereferenced_value)
-    return [load, neg], neg.res, op.arguments[off]
+    return [load, neg], neg.res, args[0]
 
 
 def _build_binary(binop_cls):
-    def build(op, vt, pfx):
-        off = 1 if pfx else 0
-        l1 = llvm.LoadOp(op.arguments[off + 1], vt)
-        l2 = llvm.LoadOp(op.arguments[off + 2], vt)
+    def build(args, vt):
+        l1 = llvm.LoadOp(args[1], vt)
+        l2 = llvm.LoadOp(args[2], vt)
         result = binop_cls(l1.dereferenced_value, l2.dereferenced_value)
-        return [l1, l2, result], result.res, op.arguments[off]
+        return [l1, l2, result], result.res, args[0]
 
     return build
 
@@ -88,44 +84,39 @@ _build_add = _build_binary(llvm.FAddOp)
 _build_mul = _build_binary(llvm.FMulOp)
 
 
-def _build_add_red(op, vt, pfx):
-    off = 1 if pfx else 0
-    dst = op.arguments[off]
+def _build_add_red(args, vt):
+    dst = args[0]
     l_dst = llvm.LoadOp(dst, vt)
-    l_src = llvm.LoadOp(op.arguments[off + 1], vt)
+    l_src = llvm.LoadOp(args[1], vt)
     add = llvm.FAddOp(l_dst.dereferenced_value, l_src.dereferenced_value)
     return [l_dst, l_src, add], add.res, dst
 
 
-def _build_fma(op, vt, pfx):
-    off = 1 if pfx else 0
-    l1 = llvm.LoadOp(op.arguments[off + 1], vt)
-    l2 = llvm.LoadOp(op.arguments[off + 2], vt)
-    l3 = llvm.LoadOp(op.arguments[off + 3], vt)
+def _build_fma(args, vt):
+    l1 = llvm.LoadOp(args[1], vt)
+    l2 = llvm.LoadOp(args[2], vt)
+    l3 = llvm.LoadOp(args[3], vt)
     fma = vector.FMAOp(operands=[l1.dereferenced_value, l2.dereferenced_value, l3.dereferenced_value], result_types=[vt])
-    return [l1, l2, l3, fma], fma.res, op.arguments[off]
+    return [l1, l2, l3, fma], fma.res, args[0]
 
 
-def _build_fma_red(op, vt, pfx):
-    off = 1 if pfx else 0
-    dst = op.arguments[off]
+def _build_fma_red(args, vt):
+    dst = args[0]
     ld = llvm.LoadOp(dst, vt)
-    l1 = llvm.LoadOp(op.arguments[off + 1], vt)
-    l2 = llvm.LoadOp(op.arguments[off + 2], vt)
+    l1 = llvm.LoadOp(args[1], vt)
+    l2 = llvm.LoadOp(args[2], vt)
     fma = vector.FMAOp(operands=[l1.dereferenced_value, l2.dereferenced_value, ld.dereferenced_value], result_types=[vt])
     return [ld, l1, l2, fma], fma.res, dst
 
 
-def _build_broadcast(op, vt, pfx):
-    off = 1 if pfx else 0
-    bcast = vector.BroadcastOp(operands=[op.arguments[off + 1]], result_types=[vt])
-    return [bcast], bcast.vector, op.arguments[off]
+def _build_broadcast(args, vt):
+    bcast = vector.BroadcastOp(operands=[args[1]], result_types=[vt])
+    return [bcast], bcast.vector, args[0]
 
 
-def _build_zero(op, vt, pfx):
-    off = 1 if pfx else 0
+def _build_zero(args, vt):
     zero = arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_float(vt, [0.0] * vt.get_shape()[0]))
-    return [zero], zero.result, op.arguments[off]
+    return [zero], zero.result, args[0]
 
 
 #
@@ -185,13 +176,22 @@ class ConvertVecIntrinsic(RewritePattern):
         if callee == "vec_reduce_add_scl_f64x4":
             return self._reduce(op, rewriter, VT_F64x4)
 
+        mm256_builder = _MM256_INTRINSICS.get(callee)
+        if mm256_builder is not None:
+            rewriter.replace_matched_op(mm256_builder(list(op.arguments)))
+            return
+
         entry = _VEC_INTRINSICS.get(callee)
         if entry is None:
             return
 
         builder, vt, mask_fn = entry
         pfx = mask_fn is not None
-        core_ops, result, dst = builder(op, vt, pfx)
+        args = list(op.arguments[1:]) if pfx else list(op.arguments)
+        if builder is _build_abs and pfx:
+            core_ops, result, dst = builder(args, vt, prefixed=True)
+        else:
+            core_ops, result, dst = builder(args, vt)
 
         if pfx:
             mask_ops, mask = mask_fn(op.arguments[0])
@@ -208,63 +208,39 @@ class ConvertVecIntrinsic(RewritePattern):
         rewriter.replace_matched_op((load, reduce, llvm.StoreOp(reduce.dest, acc_load.ptr)))
 
 
-class ConvertMM256StoreuPsOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter):
-        if op.callee.root_reference.data != "mm256_storeu_ps":
-            return
-        rewriter.replace_matched_op(
-            (
-                load_op := llvm.LoadOp(op.arguments[1], VectorType(Float32Type(), [8])),
-                llvm.StoreOp(load_op.result, op.arguments[0]),
-            )
-        )
+def _build_mm256_storeu_ps(args):
+    load = llvm.LoadOp(args[1], VT_F32x8)
+    return (load, llvm.StoreOp(load.dereferenced_value, args[0]))
 
 
-class ConvertMM256FmaddPsOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter):
-        if op.callee.root_reference.data != "mm256_fmadd_ps":
-            return
-        rewriter.replace_matched_op(
-            (
-                zero_op := arith.ConstantOp(IntegerAttr(0, IndexType())),
-                load0_op := llvm.LoadOp(op.arguments[0], VectorType(Float32Type(), [8])),
-                load1_op := llvm.LoadOp(op.arguments[1], VectorType(Float32Type(), [8])),
-                load2_op := llvm.LoadOp(op.arguments[2], VectorType(Float32Type(), [8])),
-                fma_op := vector.FMAOp(operands=[load1_op.dereferenced_value, load2_op.dereferenced_value, load0_op.dereferenced_value], result_types=[VectorType(Float32Type(), [8])]),
-                llvm.StoreOp(fma_op.res, op.arguments[0], [zero_op.result]),
-            )
-        )
+def _build_mm256_fmadd_ps(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    l0 = llvm.LoadOp(args[0], VT_F32x8)
+    l1 = llvm.LoadOp(args[1], VT_F32x8)
+    l2 = llvm.LoadOp(args[2], VT_F32x8)
+    fma = vector.FMAOp(operands=[l1.dereferenced_value, l2.dereferenced_value, l0.dereferenced_value], result_types=[VT_F32x8])
+    return (zero, l0, l1, l2, fma, llvm.StoreOp(fma.res, args[0], [zero.result]))
 
 
-class ConvertMM256BroadcastSsOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter):
-        if op.callee.root_reference.data != "mm256_broadcast_ss":
-            return
-        rewriter.replace_matched_op(
-            (
-                zero_op := arith.ConstantOp(IntegerAttr(0, IndexType())),
-                scalar_load_op := memref.LoadOp.get(op.arguments[1], [zero_op.result]),
-                broadcast_op := vector.BroadcastOp(operands=[scalar_load_op.results[0]], result_types=[VectorType(Float32Type(), [8])]),
-                llvm.StoreOp(broadcast_op.results[0], op.arguments[0], [zero_op.result]),
-            )
-        )
+def _build_mm256_broadcast_ss(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    load = memref.LoadOp.get(args[1], [zero.result])
+    bcast = vector.BroadcastOp(operands=[load.results[0]], result_types=[VT_F32x8])
+    return (zero, load, bcast, llvm.StoreOp(bcast.results[0], args[0], [zero.result]))
 
 
-class ConvertMM256LoaduPsOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter):
-        if op.callee.root_reference.data != "mm256_loadu_ps":
-            return
-        rewriter.replace_matched_op(
-            (
-                zero_op := arith.ConstantOp(IntegerAttr(0, IndexType())),
-                load_op := llvm.LoadOp(op.arguments[1], VectorType(Float32Type(), [8])),
-                llvm.StoreOp(load_op.result, op.arguments[1], [zero_op.result]),
-            )
-        )
+def _build_mm256_loadu_ps(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    load = llvm.LoadOp(args[1], VT_F32x8)
+    return (zero, load, llvm.StoreOp(load.dereferenced_value, args[1], [zero.result]))
+
+
+_MM256_INTRINSICS: dict = {
+    "mm256_storeu_ps": _build_mm256_storeu_ps,
+    "mm256_fmadd_ps": _build_mm256_fmadd_ps,
+    "mm256_broadcast_ss": _build_mm256_broadcast_ss,
+    "mm256_loadu_ps": _build_mm256_loadu_ps,
+}
 
 
 #
@@ -351,10 +327,6 @@ class ConvertIntrinsicsPass(ModulePass):
                 [
                     ConvertSelect(),
                     ConvertVecIntrinsic(),
-                    ConvertMM256StoreuPsOp(),
-                    ConvertMM256FmaddPsOp(),
-                    ConvertMM256BroadcastSsOp(),
-                    ConvertMM256LoaduPsOp(),
                 ]
             )
         ).rewrite_module(m)

@@ -51,6 +51,10 @@ class IRGenerator:
         self.type_table = None
         self.seen_procs = set()
 
+    def _emit(self, op: Operation) -> SSAValue:
+        self.builder.insert(op)
+        return op.results[0]
+
     @contextmanager
     def _tmp_state(self, *, inherit=True):
         # save and restore builder/symbol/type state across nested scopes
@@ -131,37 +135,28 @@ class IRGenerator:
         else:
             assert False
 
-        const = ConstantOp(attr, type)
-        self.builder.insert(const)
-        return const.result
+        return self._emit(ConstantOp(attr, type))
 
     def _memref_load(self, memref_val, idx):
         if len(idx) == 0:
-            self.builder.insert(zero := arith.ConstantOp(IntegerAttr(0, i64)))
-            idx = [zero.result]
-        cast_ops = [arith.IndexCastOp(i, IndexType()) for i in idx]
-        for op in cast_ops:
-            self.builder.insert(op)
-        self.builder.insert(load := memref.LoadOp.get(memref_val, [op.result for op in cast_ops]))
+            idx = [self._emit(arith.ConstantOp(IntegerAttr(0, i64)))]
+        indices = [self._emit(arith.IndexCastOp(i, IndexType())) for i in idx]
+        self.builder.insert(load := memref.LoadOp.get(memref_val, indices))
         return load.res
 
     def _memref_store(self, value, memref_val, idx):
         # emit memref.store with i64→index casts, handling scalar memref cases
         if len(idx) == 0:
             assert isinstance(memref_val.type, MemRefType) and memref_val.type.get_shape() == (1,)
-            self.builder.insert(zero := arith.ConstantOp(IntegerAttr(0, i64)))
-            idx = [zero.result]
+            idx = [self._emit(arith.ConstantOp(IntegerAttr(0, i64)))]
 
-        cast_ops = [arith.IndexCastOp(i, IndexType()) for i in idx]
-        for op in cast_ops:
-            self.builder.insert(op)
-        index_indices = [op.result for op in cast_ops]
+        index_indices = [self._emit(arith.IndexCastOp(i, IndexType())) for i in idx]
 
         # if value is a scalar memref, load it first
         if isinstance(value.type, MemRefType):
             assert value.type.get_shape() == (1,)
-            self.builder.insert(zero_idx := arith.ConstantOp(IntegerAttr(0, IndexType())))
-            self.builder.insert(load := memref.LoadOp.get(value, [zero_idx.result]))
+            zero_idx = self._emit(arith.ConstantOp(IntegerAttr(0, IndexType())))
+            self.builder.insert(load := memref.LoadOp.get(value, [zero_idx]))
             value = load.res
 
         self.builder.insert(memref.StoreOp.get(value, memref_val, index_indices))
@@ -185,16 +180,12 @@ class IRGenerator:
         type = self._type(usub.type)
 
         if type in [f16, f32, f64]:
-            usub = NegfOp(expr)
+            return self._emit(NegfOp(expr))
         elif type in [i8, i16, i32, i64]:
-            zero = ConstantOp(IntegerAttr(0, type))
-            self.builder.insert(zero)
-            usub = SubiOp(zero.result, expr, result_type=type)
+            zero = self._emit(ConstantOp(IntegerAttr(0, type)))
+            return self._emit(SubiOp(zero, expr, result_type=type))
         else:
             assert False
-
-        self.builder.insert(usub)
-        return usub.result
 
     def _binop_expr(self, binop):
         # lower binary op to typed arith op; delegates to _binop_expr_cmp for i1
@@ -210,16 +201,11 @@ class IRGenerator:
         int_ops = {"+": AddiOp, "-": SubiOp, "*": MuliOp, "/": DivSIOp, "%": RemSIOp}
 
         if type in [f16, f32, f64]:
-            op_cls = float_ops[binop.op]
-            op = op_cls(lhs, rhs, result_type=type, flags=FastMathFlagsAttr("none"))
+            return self._emit(float_ops[binop.op](lhs, rhs, result_type=type, flags=FastMathFlagsAttr("none")))
         elif type in [i8, i16, i32, i64]:
-            op_cls = int_ops[binop.op]
-            op = op_cls(lhs, rhs, result_type=type)
+            return self._emit(int_ops[binop.op](lhs, rhs, result_type=type))
         else:
             assert False
-
-        self.builder.insert(op)
-        return op.result
 
     def _binop_expr_cmp(self, binop):
         # lower comparison/logical binop to cmpi, cmpf, andi, or ori
@@ -234,55 +220,11 @@ class IRGenerator:
         assert lhs.type == rhs.type, f"cannot compare {lhs.type} and {rhs.type} with operator '{binop.op}'"
 
         if lhs.type == i1:
-            op = bool_ops[binop.op](lhs, rhs)
+            return self._emit(bool_ops[binop.op](lhs, rhs))
         elif lhs.type in [i8, i16, i32, i64]:
-            op = CmpiOp(lhs, rhs, integer_cmp_table[binop.op])
+            return self._emit(CmpiOp(lhs, rhs, integer_cmp_table[binop.op]))
         else:
-            op = CmpfOp(lhs, rhs, float_cmp_table[binop.op])
-
-        self.builder.insert(op)
-        return op.result
-
-    @staticmethod
-    def _compute_strides(ops: list[Operation], sizes: list[SSAValue | int]) -> list[SSAValue | int]:
-        # stride[i] = product(sizes[i+1:]), computed right-to-left
-        strides: list[SSAValue | int] = [1]
-        for size in reversed(sizes):
-            last = strides[0]
-            if isinstance(last, int) and isinstance(size, int):
-                strides.insert(0, last * size)
-                continue
-            if isinstance(last, int):
-                ops.append(c := ConstantOp(IntegerAttr(last, i64)))
-                last = c.result
-            if isinstance(size, int):
-                ops.append(c := ConstantOp(IntegerAttr(size, i64)))
-                size = c.result
-            ops.append(mul := MuliOp(operand1=last, operand2=size))
-            strides.insert(0, mul.result)
-        return strides
-
-    @staticmethod
-    def _compute_offsets(ops: list[Operation], indices: list[SSAValue], strides: list[SSAValue | int]) -> list[SSAValue]:
-        # offset[i] = index[i] * stride[i]
-        offsets: list[SSAValue] = []
-        for idx, stride in zip(indices, strides):
-            if isinstance(stride, int):
-                ops.append(c := ConstantOp(IntegerAttr(stride, i64)))
-                stride = c.result
-            ops.append(mul := MuliOp(operand1=idx, operand2=stride))
-            offsets.append(mul.result)
-        return offsets
-
-    @staticmethod
-    def _to_index(ops: list[Operation], values: Sequence[SSAValue | int]) -> list[SSAValue]:
-        # cast i64 ssavalues to index type, pass through static ints as-is for subviewop
-        static, dynamic = split_dynamic_index_list(values, memref.DYNAMIC_INDEX)
-        casted = []
-        for v in dynamic:
-            ops.append(cast := arith.IndexCastOp(v, IndexType()))
-            casted.append(cast.result)
-        return get_dynamic_index_list(static, casted, memref.DYNAMIC_INDEX)
+            return self._emit(CmpfOp(lhs, rhs, float_cmp_table[binop.op]))
 
     def _window_expr(self, window):
         # lower window expression to stride/offset computation + memref.subview
@@ -297,6 +239,36 @@ class IRGenerator:
                 case _:
                     assert False
 
+        def compute_strides(sizes):
+            # stride[i] = product(sizes[i+1:]), computed right-to-left
+            strides: list[SSAValue | int] = [1]
+            for size in reversed(sizes):
+                last = strides[0]
+                if isinstance(last, int) and isinstance(size, int):
+                    strides.insert(0, last * size)
+                    continue
+                if isinstance(last, int):
+                    last = self._emit(ConstantOp(IntegerAttr(last, i64)))
+                if isinstance(size, int):
+                    size = self._emit(ConstantOp(IntegerAttr(size, i64)))
+                strides.insert(0, self._emit(MuliOp(operand1=last, operand2=size)))
+            return strides
+
+        def compute_offsets(indices, strides):
+            # offset[i] = index[i] * stride[i]
+            offsets: list[SSAValue] = []
+            for idx, stride in zip(indices, strides):
+                if isinstance(stride, int):
+                    stride = self._emit(ConstantOp(IntegerAttr(stride, i64)))
+                offsets.append(self._emit(MuliOp(operand1=idx, operand2=stride)))
+            return offsets
+
+        def to_index(values):
+            # cast i64 ssavalues to index type, pass through static ints as-is for subviewop
+            static, dynamic = split_dynamic_index_list(values, memref.DYNAMIC_INDEX)
+            casted = [self._emit(arith.IndexCastOp(v, IndexType())) for v in dynamic]
+            return get_dynamic_index_list(static, casted, memref.DYNAMIC_INDEX)
+
         idx = [w_access(w) for w in window.idx]
         input = self.symbol_table[repr(window.name)]
         dest_type = self._type(window.type.as_tensor, input.type.memory_space)
@@ -304,14 +276,11 @@ class IRGenerator:
         output_sizes = self._shape(window.type.as_tensor, dynamic=True)
 
         # compute strides/offsets in i64, then cast to index for subview
-        ops: list[Operation] = []
-        strides = self._compute_strides(ops, input_sizes)
-        offsets = self._compute_offsets(ops, idx, strides)
-        strides_idx = self._to_index(ops, strides)
-        offsets_idx = self._to_index(ops, offsets)
-        sizes_idx = self._to_index(ops, output_sizes)
-        for op in ops:
-            self.builder.insert(op)
+        strides = compute_strides(input_sizes)
+        offsets = compute_offsets(idx, strides)
+        strides_idx = to_index(strides)
+        offsets_idx = to_index(offsets)
+        sizes_idx = to_index(output_sizes)
 
         self.builder.insert(subview := memref.SubviewOp.get(input, offsets_idx, sizes_idx, strides_idx, dest_type))
         return subview.result
@@ -321,8 +290,7 @@ class IRGenerator:
         assert isinstance(extern, LoopIR.Extern)
         output_type = self._type(extern.f.typecheck(extern.args))
         args = [self._expr(e) for e in extern.args]
-        self.builder.insert(op := CallOp(extern.f.name(), args, [output_type]))
-        return op.res[0]
+        return self._emit(CallOp(extern.f.name(), args, [output_type]))
 
     def _expr(self, expr) -> OpResult | SSAValue:
         # dispatch loopir expression node to its typed lowering method
@@ -391,8 +359,7 @@ class IRGenerator:
         lo = self._expr(for_stmt.lo)
         hi = self._expr(for_stmt.hi)
         assert lo.type == hi.type
-        step = ConstantOp(IntegerAttr(1, lo.type))
-        self.builder.insert(step)
+        step = self._emit(ConstantOp(IntegerAttr(1, lo.type)))
 
         with self._tmp_state():
             loop_block = Block(arg_types=[lo.type])
@@ -406,7 +373,7 @@ class IRGenerator:
                 self._stmt(s)
             self.builder.insert(YieldOp())
 
-        self.builder.insert(ForOp(lo, hi, step.result, [], Region(loop_block)))
+        self.builder.insert(ForOp(lo, hi, step, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
         # lower alloc to memref.alloc (dram) or llvm.alloca (other)
@@ -428,10 +395,9 @@ class IRGenerator:
 
         # vec_avx2 or other
         total_size = reduce(lambda x, y: x * y, type.get_shape())
-        self.builder.insert(const_op := arith.ConstantOp(IntegerAttr(total_size, i64)))
-        self.builder.insert(alloc_op := llvm.AllocaOp(const_op.result, type.element_type))
-        self.builder.insert(cast_op := UnrealizedConversionCastOp.get(alloc_op.res, type))
-        result = cast_op.results[0]
+        const_val = self._emit(arith.ConstantOp(IntegerAttr(total_size, i64)))
+        alloc_res = self._emit(llvm.AllocaOp(const_val, type.element_type))
+        result = self._emit(UnrealizedConversionCastOp.get(alloc_res, type))
         self.symbol_table[repr(alloc.name)] = result
         self.type_table[repr(alloc.name)] = alloc.type
         return result
@@ -487,15 +453,17 @@ class IRGenerator:
     @staticmethod
     def _is_mutated(name: str, body) -> bool:
         # check if a variable is assigned to or reduced into in the body
-        for stmt in body:
+        def check(stmt):
             match stmt:
-                case LoopIR.Assign() | LoopIR.Reduce() if repr(stmt.name) == name:
-                    return True
-                case LoopIR.For() if IRGenerator._is_mutated(name, stmt.body):
-                    return True
-                case LoopIR.If() if IRGenerator._is_mutated(name, stmt.body) or IRGenerator._is_mutated(name, stmt.orelse):
-                    return True
-        return False
+                case LoopIR.Assign() | LoopIR.Reduce():
+                    return repr(stmt.name) == name
+                case LoopIR.For():
+                    return IRGenerator._is_mutated(name, stmt.body)
+                case LoopIR.If():
+                    return IRGenerator._is_mutated(name, stmt.body) or IRGenerator._is_mutated(name, stmt.orelse)
+            return False
+
+        return any(check(s) for s in body)
 
     def _procedure(self, procedure):
         # lower loopir proc to func.func
