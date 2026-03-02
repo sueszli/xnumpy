@@ -21,14 +21,14 @@ VT_F64x4 = VectorType(f64, [4])
 
 
 def _mask_f32x8(m):
-    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_int(VectorType(i64, [8]), list(range(8))))
+    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.from_list(VectorType(i64, [8]), list(range(8))))
     broadcast = vector.BroadcastOp(operands=[m], result_types=[VectorType(i64, [8])])
     mask = llvm.ICmpOp(indices.result, broadcast.vector, IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64))
     return [indices, broadcast, mask], mask.res
 
 
 def _mask_f64x4_ext(m):
-    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_int(VectorType(i64, [4]), list(range(4))))
+    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.from_list(VectorType(i64, [4]), list(range(4))))
     ext = arith.ExtSIOp(m, i64)
     broadcast = vector.BroadcastOp(operands=[ext.result], result_types=[VectorType(i64, [4])])
     mask = llvm.ICmpOp(indices.result, broadcast.vector, IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64))
@@ -36,7 +36,7 @@ def _mask_f64x4_ext(m):
 
 
 def _mask_f64x4(m):
-    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.create_dense_int(VectorType(i64, [4]), list(range(4))))
+    indices = arith.ConstantOp(DenseIntOrFPElementsAttr.from_list(VectorType(i64, [4]), list(range(4))))
     broadcast = vector.BroadcastOp(operands=[m], result_types=[VectorType(i32, [4])])
     mask = llvm.ICmpOp(indices.result, broadcast.vector, IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64))
     return [indices, broadcast, mask], mask.res

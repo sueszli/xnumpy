@@ -97,15 +97,14 @@ LLVMIntrinsics = Dialect(
     [],
 )
 
+
 #
-# convertmemreftoptr extensions
+# ConvertMemRefToPtr extensions
 #
 
 
 @dataclass
 class ConvertCastOp(RewritePattern):
-    # converts memref.cast to identity (forwards source).
-
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.CastOp, rewriter: PatternRewriter, /):
         assert isa(op.source.type, memref.MemRefType)
@@ -114,8 +113,6 @@ class ConvertCastOp(RewritePattern):
 
 @dataclass
 class ConvertReinterpretCastOp(RewritePattern):
-    # converts memref.reinterpret_cast to ptr cast.
-
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.ReinterpretCastOp, rewriter: PatternRewriter, /):
         rewriter.replace_matched_op(
