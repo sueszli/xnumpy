@@ -5,11 +5,17 @@ requires-python = ">=3.11"
 dependencies = [
     "exo-lang==1.0.0",
     "xdsl==0.57.0",
+    "lit",
+    "numpy",
+    "pytest",
 ]
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["xdsl_exo*"]
 
 [project.scripts]
 xdsl-exo = "xdsl_exo.main:main"

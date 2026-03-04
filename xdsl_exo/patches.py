@@ -38,7 +38,7 @@ class FAbsOp(IRDLOperation):
 
 @irdl_op_definition
 class FNegOp(IRDLOperation):
-    # todo
+    # https://github.com/xdslproject/xdsl/pull/5697
     T: ClassVar = VarConstraint("T", AnyFloatConstr | VectorType.constr(AnyFloatConstr))
 
     name = "llvm.fneg"
