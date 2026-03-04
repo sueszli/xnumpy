@@ -192,6 +192,159 @@ Why the lowering goes through a raw pointer:
 
 
 ================================================================================
+How lowerings interact: load after subview / reinterpret_cast
+================================================================================
+
+The key insight: each lowering only handles its own op. The result type of one
+op becomes the input type of the next. The load lowering reads the strides from
+whatever memref type it sees, regardless of how that memref was created.
+
+
+Example 1: memref.subview + memref.load
+----------------------------------------
+
+Source IR:
+
+    %buf = memref.alloc() : memref<10xi32>
+    memref.store %val, %buf[7] : memref<10xi32>
+    %sub = memref.subview %buf[5][5][1] : memref<10xi32> to memref<5xi32>
+    %v   = memref.load %sub[2] : memref<5xi32>    // loads buf[5+2] = buf[7]
+
+C equivalent before lowering:
+
+    int32_t buf[10];
+    buf[7] = val;
+    int32_t *sub = &buf[5];     // subview: pointer to element 5
+    int32_t v = sub[2];         // load at index 2 within the subview
+
+Step 1 -- ConvertSubviewPattern lowers the subview:
+
+    %buf = memref.alloc() : memref<10xi32>
+    memref.store %val, %buf[7] : memref<10xi32>
+
+    // subview lowering:
+    %ptr     = ptr_xdsl.to_ptr %buf           : memref<10xi32> -> !ptr_xdsl.ptr
+    %c5      = arith.constant 5               : index
+    %bpe     = ptr_xdsl.type_offset i32       : index    // = 4
+    %bytes   = arith.muli %c5, %bpe           : index    // = 20
+    %sub_ptr = ptr_xdsl.ptradd %ptr, %bytes   : !ptr_xdsl.ptr
+    %sub     = ptr_xdsl.from_ptr %sub_ptr     : !ptr_xdsl.ptr -> memref<5xi32>
+
+    %v = memref.load %sub[2] : memref<5xi32>
+
+    In C:
+    void *ptr = (void *)buf;
+    void *sub_ptr = ptr + 5 * sizeof(int32_t);  // ptr + 20 bytes
+    int32_t *sub = (int32_t *)sub_ptr;           // from_ptr
+
+Step 2 -- ConvertLoadPattern lowers the load:
+
+    The load sees %sub : memref<5xi32>. Strides for memref<5xi32> = [1].
+    So it computes: element offset = index * stride = 2 * 1 = 2.
+
+    // load lowering:
+    %load_ptr = ptr_xdsl.to_ptr %sub          : memref<5xi32> -> !ptr_xdsl.ptr
+    %c2       = arith.constant 2              : index
+    %bpe2     = ptr_xdsl.type_offset i32      : index    // = 4
+    %bytes2   = arith.muli %c2, %bpe2         : index    // = 8
+    %elem_ptr = ptr_xdsl.ptradd %load_ptr, %bytes2
+    %v        = ptr_xdsl.load %elem_ptr       : i32
+
+    In C:
+    void *load_ptr = (void *)sub;                // same pointer as sub_ptr
+    void *elem_ptr = load_ptr + 2 * sizeof(int32_t);  // + 8 bytes
+    int32_t v = *(int32_t *)elem_ptr;
+
+    Total offset from buf: 20 + 8 = 28 bytes = 7 * sizeof(int32_t) = buf[7]. Correct.
+
+The two lowerings compose by convention:
+    - subview produces a ptr_xdsl.from_ptr that returns a memref with the
+      subview's result type (memref<5xi32>), pointer already offset to the
+      subview start
+    - load sees that memref type, extracts the pointer with to_ptr, and does
+      its own stride arithmetic relative to that already-offset pointer
+    - the from_ptr/to_ptr roundtrip on %sub is redundant and gets optimized
+      away in later passes
+
+
+Example 2: memref.reinterpret_cast + memref.load
+--------------------------------------------------
+
+Source IR:
+
+    %buf = memref.alloc() : memref<12xindex>
+    memref.store %val, %buf[7] : memref<12xindex>
+    %mat = memref.reinterpret_cast %buf
+        offsets: [0], sizes: [3, 4], strides: [4, 1]
+        : memref<12xindex> -> memref<3x4xindex, strided<[4, 1]>>
+    %v = memref.load %mat[1, 3] : memref<3x4xindex, strided<[4, 1]>>
+    // loads buf[1*4 + 3*1] = buf[7]
+
+C equivalent before lowering:
+
+    int64_t buf[12];
+    buf[7] = val;
+    int64_t (*mat)[4] = (int64_t(*)[4])buf;  // reinterpret as 3x4 matrix
+    int64_t v = mat[1][3];                    // = buf[1*4 + 3] = buf[7]
+
+Step 1 -- ConvertReinterpretCastOp lowers the reinterpret:
+
+    %buf = memref.alloc() : memref<12xindex>
+    memref.store %val, %buf[7] : memref<12xindex>
+
+    // reinterpret lowering:
+    %ptr = ptr_xdsl.to_ptr %buf : memref<12xindex> -> !ptr_xdsl.ptr
+    %mat = unrealized_conversion_cast %ptr
+        : !ptr_xdsl.ptr -> memref<3x4xindex, strided<[4, 1]>>
+
+    %v = memref.load %mat[1, 3] : memref<3x4xindex, strided<[4, 1]>>
+
+    In C:
+    void *ptr = (void *)buf;
+    int64_t (*mat)[4] = (int64_t(*)[4])ptr;  // "trust me" cast
+
+    Note: no pointer arithmetic here! The reinterpret_cast with offset=0
+    doesn't move the pointer. It just changes the type annotation.
+
+Step 2 -- ConvertLoadPattern lowers the load:
+
+    The load sees %mat : memref<3x4xindex, strided<[4, 1]>>.
+    Strides = [4, 1]. Indices = [1, 3].
+    Element offset = 1*4 + 3*1 = 7.
+
+    // load lowering:
+    %load_ptr = ptr_xdsl.to_ptr %mat          : memref<3x4xindex, ...> -> !ptr_xdsl.ptr
+    %c4       = arith.constant 4              : index
+    %off_r    = arith.muli %c1, %c4           : index    // 1*4 = 4
+    %off_c    = %c3                                       // 3*1 = 3 (stride 1, no multiply)
+    %offset   = arith.addi %off_r, %off_c    : index     // 4+3 = 7
+    %bpe      = ptr_xdsl.type_offset index    : index     // = 8 (64-bit)
+    %bytes    = arith.muli %offset, %bpe      : index     // = 56
+    %elem_ptr = ptr_xdsl.ptradd %load_ptr, %bytes
+    %v        = ptr_xdsl.load %elem_ptr       : index
+
+    In C:
+    void *load_ptr = (void *)mat;                  // same as buf
+    void *elem_ptr = load_ptr + 7 * sizeof(int64_t);  // + 56 bytes
+    int64_t v = *(int64_t *)elem_ptr;              // = buf[7]
+
+The two lowerings compose because:
+    - reinterpret_cast stamps a new type (with new strides) onto the same pointer
+    - load reads those strides from the type and uses them for its arithmetic
+    - the unrealized_conversion_cast/to_ptr roundtrip on %mat is again
+      redundant and gets cleaned up later
+
+
+Key difference between subview and reinterpret_cast lowering:
+
+    subview:          moves the pointer (adds byte offset), creates from_ptr
+    reinterpret_cast: keeps the pointer, changes the type via unrealized_conversion_cast
+
+    Both produce a memref that the load lowering consumes identically --
+    it just reads the type's strides and does dot_product(indices, strides).
+
+
+================================================================================
 Summary
 ================================================================================
 
