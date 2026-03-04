@@ -1,0 +1,207 @@
+================================================================================
+memref explained through C
+================================================================================
+
+
+1. What is a memref?
+--------------------
+
+A memref is a fat pointer: a data pointer + shape/stride metadata.
+
+    memref<10xi32>
+
+is roughly:
+
+    struct {
+        int32_t *data;
+        int64_t  size;      // 10
+        int64_t  stride;    // 1 (default, contiguous)
+    };
+
+A 2D memref like memref<3x4xf64> is:
+
+    struct {
+        double  *data;
+        int64_t  sizes[2];    // {3, 4}
+        int64_t  strides[2];  // {4, 1}  (row-major by default)
+    };
+
+In C terms, creating a memref is like:
+
+    // memref<10xi32>
+    int32_t buffer[10];
+
+    // memref<3x4xf64>
+    double matrix[3][4];
+
+
+2. Static vs dynamic dimensions
+--------------------------------
+
+    memref<10xi32>     // compile-time known size  ->  int32_t buf[10];
+    memref<?xi32>      // runtime-only known size   ->  int32_t *buf;
+
+The ? means the size is erased from the type. The underlying pointer is the same,
+you just lose the static guarantee.
+
+
+3. Strides
+----------
+
+Strides say "how many elements do I skip to advance one index along this axis."
+
+    memref<3x4xi32>                        // default strides: [4, 1]
+    memref<3x4xi32, strided<[1, 1]>>       // custom strides:  [1, 1]
+
+In C:
+
+    // default strides [4, 1] (row-major):
+    //   element(row, col) = data[row * 4 + col * 1]
+    int32_t matrix[3][4];
+    matrix[r][c];  // compiler does: *(data + r*4 + c)
+
+    // custom strides [1, 1]:
+    //   element(row, col) = data[row * 1 + col * 1]
+    //   this is a weird layout where row and col both step by 1
+    int32_t *flat = (int32_t *)matrix;
+    flat[r * 1 + c * 1];
+
+
+================================================================================
+memref.cast
+================================================================================
+
+Signature:
+    %dst = memref.cast %src : memref<10xi32> -> memref<?xi32>
+
+What it does:
+    Changes the STATIC TYPE but keeps the same pointer and data.
+    No runtime work. No copies. Just a type-level annotation change.
+
+C equivalent:
+
+    int32_t buffer[10] = {0,1,2,3,4,5,6,7,8,9};
+
+    // memref.cast: memref<10xi32> -> memref<?xi32>
+    int32_t *dynamic_view = buffer;
+    // same pointer, but the compiler no longer knows it's exactly 10 elements
+
+    // you can also go the other way if you "know" the size:
+    // memref.cast: memref<?xi32> -> memref<10xi32>
+    int32_t (*static_view)[10] = (int32_t(*)[10])dynamic_view;
+    // same pointer, compiler now treats it as exactly 10 elements again
+
+Rules:
+    - source and dest must be compatible (same element type, compatible shapes)
+    - only static <-> dynamic dimension changes are allowed
+    - memref<10xi32> -> memref<?xi32>    OK  (erase static size)
+    - memref<?xi32>  -> memref<10xi32>   OK  (assert static size)
+    - memref<10xi32> -> memref<5xi32>    NOT OK (different concrete sizes)
+
+Why the lowering just erases it:
+
+    rewriter.replace_matched_op((), (op.source,))
+
+    At the pointer level there is nothing to do. The cast only changes
+    compile-time type metadata. When lowering to raw pointers, the metadata
+    is gone anyway, so the cast becomes a no-op and we just use the source
+    directly.
+
+    // Before lowering:
+    %src = ...                           : memref<10xi32>
+    %dst = memref.cast %src              : memref<10xi32> -> memref<?xi32>
+    use(%dst)
+
+    // After lowering:
+    %src = ...                           : memref<10xi32>
+    use(%src)                            // cast is gone, use source directly
+
+
+================================================================================
+memref.reinterpret_cast
+================================================================================
+
+Signature:
+    %dst = memref.reinterpret_cast %src
+        offsets: [0], sizes: [5, 4], strides: [1, 1]
+        : memref<10x2xindex> -> memref<5x4xindex, strided<[1, 1]>>
+
+What it does:
+    Reinterprets the SAME memory with a completely different shape and strides.
+    Same pointer. No copies. The caller is responsible for correctness.
+
+C equivalent:
+
+    // source: 10x2 array = 20 elements
+    int64_t buffer[10][2];
+
+    // reinterpret_cast: view the same 20 elements as 5x4 with strides [1,1]
+    int64_t *raw = (int64_t *)buffer;
+
+    // now access with new shape:
+    //   element(r, c) = raw[0 + r*1 + c*1]    (offset=0, strides=[1,1])
+    #define REINTERPRETED(r, c)  raw[0 + (r)*1 + (c)*1]
+
+    // this is basically C's reinterpret_cast:
+    //   same bytes, totally different interpretation
+
+Another example -- reshaping a flat buffer into a matrix:
+
+    // source: flat array of 12 elements
+    // memref<12xf32>
+    float flat[12];
+
+    // reinterpret as 3x4 matrix, row-major (strides [4,1])
+    // memref.reinterpret_cast: memref<12xf32> -> memref<3x4xf32, strided<[4,1]>>
+    float (*matrix)[4] = (float(*)[4])flat;
+    // matrix[r][c] == flat[r*4 + c]
+
+Difference from memref.cast:
+    - memref.cast:             only changes static/dynamic annotations, same shape
+    - memref.reinterpret_cast: changes shape, strides, offset -- anything goes
+
+Why the lowering goes through a raw pointer:
+
+    rewriter.replace_matched_op((
+        ptr_cast := ptr.ToPtrOp(op.source),
+        builtin.UnrealizedConversionCastOp.get(
+            [ptr_cast.res], [op.result.type]
+        ),
+    ))
+
+    Since the shape/strides change, we can't just swap the source in. Instead:
+    1. Strip the source memref down to a raw pointer  (ToPtrOp)
+    2. Re-stamp it with the new memref type            (UnrealizedConversionCast)
+
+    // Before lowering:
+    %src = ... : memref<10x2xindex>
+    %dst = memref.reinterpret_cast %src
+        : memref<10x2xindex> -> memref<5x4xindex, strided<[1,1]>>
+    use(%dst)
+
+    // After lowering:
+    %src = ... : memref<10x2xindex>
+    %ptr = ptr_xdsl.to_ptr %src : memref<10x2xindex> -> !ptr_xdsl.ptr
+    %dst = unrealized_conversion_cast %ptr : !ptr_xdsl.ptr -> memref<5x4xindex, strided<[1,1]>>
+    use(%dst)
+
+    In C:
+    int64_t buffer[10][2];                              // %src
+    void *raw = (void *)buffer;                         // %ptr  (to_ptr)
+    int64_t (*view)[4] = (int64_t(*)[4])raw;            // %dst  (unrealized_conversion_cast)
+
+
+================================================================================
+Summary
+================================================================================
+
+    Concept              C analogy                     Runtime cost
+    -------------------------------------------------------------------
+    memref<NxT>          T arr[N]  (fat pointer)       none (it's a type)
+    memref<?xT>          T *arr    (size unknown)      none (it's a type)
+    memref.cast          T arr[10] -> T *arr           zero (same pointer)
+    memref.reinterpret   (T(*)[4])raw_ptr              zero (same pointer)
+
+Both casts are zero-cost at runtime. The only difference is what type
+information changes: cast tweaks static/dynamic dims, reinterpret_cast
+changes the entire shape and stride layout.
