@@ -4,7 +4,7 @@ venv:
 
 .PHONY: tests
 tests:
-	uv run pytest -W ignore tests/
+	uv run pytest -W ignore --forked tests/
 	uv run lit tests/filecheck/
 
 .PHONY: precommit

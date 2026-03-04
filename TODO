@@ -1,4 +1,28 @@
-end to end tests compare against custom c code, not exo generated c code, comparing the two backends.
+bugs found in e2e tests (2026-03-04)
+
+    bare buffer args in sub-procedure calls (6 tests)
+        _read_expr calls _type(Tensor) without mem_space on bare buffer args
+        passed to sub-procedures, triggering an AssertionError
+        (main.py:174 → main.py:96).
+        Affects: test_subproc (4 tests), test_window (2 tests).
+
+    non-zero-offset window subview (1 test)
+        Slicing a buffer with a non-zero offset (e.g. x[4:8]) produces
+        memref<-1xf32> instead of the correct memref<4xf32>.
+        Affects: test_window_fill_second_half.
+
+    dynamic 2D memref strides (2 tests)
+        ConvertMemRefToPtr asserts positive strides, but dynamic 2D memrefs
+        (memref<?x?xf32>) get stride -1 and fail.
+        Affects: test_multi_dim (test_dynamic_2d_3x4, test_dynamic_2d_1x1).
+
+    xDSL IRDL GC segfault (infrastructure)
+        xDSL's IRDL type constraint system segfaults during garbage collection
+        when many compilations run in a single process. Worked around by
+        disabling GC during xdsl_compile_procs() calls in conftest.py.
+        Root cause is in xdsl/irdl/attributes.py — recursive type checking
+        interacts badly with Python's cyclic GC.
+
 
 memref doesnt support strides (see examples/window_roundtrip.py)
 

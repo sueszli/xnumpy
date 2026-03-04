@@ -8,6 +8,7 @@ dependencies = [
     "lit",
     "numpy",
     "pytest",
+    "pytest-forked",
 ]
 
 [build-system]

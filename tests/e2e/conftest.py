@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import gc
 import os
 import re
 import shutil
@@ -16,9 +17,18 @@ from exo.core.LoopIR import LoopIR
 
 from xdsl_exo.main import compile_procs as xdsl_compile_procs
 
-# exo basetype string -> (numpy dtype, ctypes type)
+# xDSL's IRDL type system segfaults during garbage collection when many
+# compilations run in a single process. Disable GC for the test session and
+# force-exit before Python's finalization re-enables it.
+gc.disable()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    os._exit(exitstatus)
+
+
 _TYPES = {
-    "f16": (np.float16, ctypes.c_uint16),  # no c_half, pass as raw bits
+    "f16": (np.float16, ctypes.c_uint16),
     "f32": (np.float32, ctypes.c_float),
     "f64": (np.float64, ctypes.c_double),
     "i8": (np.int8, ctypes.c_int8),
@@ -91,7 +101,6 @@ def _call(lib, proc_ir, kwargs, *, has_ctxt):
 
 
 def assert_match(proc, **kwargs):
-    # compile proc via both exo (C) and xdsl (MLIR), run with kwargs, assert outputs match
     ir = proc._loopir_proc
     exo_bufs = _call(_compile_exo_c([proc]), ir, deepcopy(kwargs), has_ctxt=True)
     xdsl_bufs = _call(_compile_xdsl_mlir([proc]), ir, deepcopy(kwargs), has_ctxt=False)
