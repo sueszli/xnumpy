@@ -35,7 +35,7 @@ from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsP
 from xdsl.utils.scoped_dict import ScopedDict
 
 from xdsl_exo.patches import ExtendedConvertMemRefToPtr, LLVMIntrinsics
-from xdsl_exo.rewrites import ConvertAllocOp, ConvertFreeOp, ConvertVecIntrinsic, RewriteMemRefTypes
+from xdsl_exo.rewrites import ConvertVecIntrinsic, RewriteMemRefTypes
 
 
 class IRGenerator:
@@ -385,7 +385,7 @@ class IRGenerator:
         self.builder.insert(ForOp(lo, hi, step, [], Region(loop_block)))
 
     def _alloc_stmt(self, alloc):
-        # lower alloc to memref.alloc (dram) or llvm.alloca (other)
+        # lower alloc to llvm.call @malloc (DRAM) or llvm.alloca (stack)
         assert isinstance(alloc, LoopIR.Alloc)
         mem_name = alloc.mem.name()
         mem_space = StringAttr(mem_name)
@@ -395,28 +395,27 @@ class IRGenerator:
         if not isinstance(type, MemRefType):
             type = MemRefType(type, [1], NoneAttr(), mem_space)
 
-        if mem_name == "DRAM":
-            self.builder.insert(op := memref.AllocOp.get(type.element_type, shape=type.shape, layout=type.layout, memory_space=mem_space))
-            result = op.memref
-            self.symbol_table[repr(alloc.name)] = result
-            self.type_table[repr(alloc.name)] = alloc.type
-            return result
-
-        # vec_avx2 or other
         total_size = reduce(lambda x, y: x * y, type.get_shape())
         const_val = self._emit(arith.ConstantOp(IntegerAttr(total_size, i64)))
-        alloc_res = self._emit(llvm.AllocaOp(const_val, type.element_type))
-        result = self._emit(UnrealizedConversionCastOp.get(alloc_res, type))
+
+        if mem_name == "DRAM":
+            raw_ptr = self._emit(llvm.CallOp("malloc", const_val, return_type=llvm.LLVMPointerType()))
+        else:
+            raw_ptr = self._emit(llvm.AllocaOp(const_val, type.element_type))
+
+        result = self._emit(UnrealizedConversionCastOp.get(raw_ptr, type))
         self.symbol_table[repr(alloc.name)] = result
         self.type_table[repr(alloc.name)] = alloc.type
         return result
 
     def _free_stmt(self, free):
-        # lower free to memref.dealloc
+        # lower free to llvm.call @free (DRAM) or no-op (stack)
         assert isinstance(free, LoopIR.Free)
-        if free.mem.name() == "VEC_AVX2":
-            return  # live on stack (llvm.alloca)
-        self.builder.insert(memref.DeallocOp.get(self.symbol_table[repr(free.name)]))
+        if free.mem.name() != "DRAM":
+            return  # non-DRAM buffers live on stack (llvm.alloca)
+        memref_val = self.symbol_table[repr(free.name)]
+        cast = self._emit(UnrealizedConversionCastOp.get([memref_val], [llvm.LLVMPointerType()]))
+        self.builder.insert(llvm.CallOp("free", cast))
 
     def _window_stmt(self, stmt):
         # lower window statement to subview and bind result in symbol/type tables
@@ -520,6 +519,10 @@ class IRGenerator:
     def generate(self, procs) -> ModuleOp:
         for proc in procs:
             self._procedure(proc)
+        # declare external malloc/free for DRAM alloc/free lowering
+        module_builder = Builder(insertion_point=InsertPoint.at_end(self.module.body.blocks[0]))
+        module_builder.insert(llvm.FuncOp("malloc", llvm.LLVMFunctionType([i64], llvm.LLVMPointerType()), llvm.LinkageAttr("external")))
+        module_builder.insert(llvm.FuncOp("free", llvm.LLVMFunctionType([llvm.LLVMPointerType()]), llvm.LinkageAttr("external")))
         return self.module
 
 
@@ -549,12 +552,6 @@ def _transform(analyzed_procs: list) -> ModuleOp:
 
     # full lowering to llvm dialect
     _rewrite = lambda patterns: PatternRewriteWalker(GreedyRewritePatternApplier(patterns)).rewrite_module(module)
-
-    # DRAM alloc -> malloc, dealloc -> free
-    b = Builder(InsertPoint.at_end(module.body.block))
-    b.insert(llvm.FuncOp("malloc", llvm.LLVMFunctionType([i64], llvm.LLVMPointerType()), llvm.LinkageAttr("external")))
-    b.insert(llvm.FuncOp("free", llvm.LLVMFunctionType([llvm.LLVMPointerType()]), llvm.LinkageAttr("external")))
-    _rewrite([ConvertAllocOp(), ConvertFreeOp()])
 
     ExtendedConvertMemRefToPtr().apply(ctx, module)  # memref.{load,store,subview,cast} -> ptr ops
     ConvertPtrTypeOffsetsPass().apply(ctx, module)  # ptr.TypeOffsetOp -> arith.constant(sizeof)

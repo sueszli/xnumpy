@@ -1,19 +1,11 @@
 from dataclasses import dataclass
-from functools import cache, reduce
+from functools import cache
 
 from xdsl.dialects import arith, func, llvm, memref, vector
-from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IndexType, IntegerAttr, MemRefType, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
+from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IndexType, IntegerAttr, MemRefType, VectorType, f32, f64, i32, i64
 from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, TypeConversionPattern, attr_type_rewrite_pattern, op_type_rewrite_pattern
 
 from xdsl_exo import patches as llvm_extra
-
-VT_F32x8 = VectorType(f32, [8])
-VT_F64x4 = VectorType(f64, [4])
-
-
-#
-# mask generation for prefix (partial width) variants
-#
 
 
 def _mask_f32x8(m):
@@ -36,11 +28,6 @@ def _mask_f64x4(m):
     broadcast = vector.BroadcastOp(operands=[m], result_types=[VectorType(i32, [4])])
     mask = llvm.ICmpOp(indices.result, broadcast.vector, IntegerAttr(llvm.ICmpPredicateFlag.SLT.to_int(), i64))
     return [indices, broadcast, mask], mask.res
-
-
-#
-# core operation builders
-#
 
 
 def _build_identity(args, vt):
@@ -109,11 +96,6 @@ def _build_zero(args, vt):
     return [zero], zero.result, args[0]
 
 
-#
-# intrinsic dispatch table
-#
-
-
 _VEC_INTRINSICS: dict = {}
 for _name, _builder, _f64_mask in [
     ("abs", _build_abs, _mask_f64x4_ext),
@@ -130,10 +112,45 @@ for _name, _builder, _f64_mask in [
     ("fmadd_red", _build_fma_red, _mask_f64x4),
     ("zero", _build_zero, _mask_f64x4),
 ]:
-    _VEC_INTRINSICS[f"vec_{_name}_f32x8"] = (_builder, VT_F32x8, None)
-    _VEC_INTRINSICS[f"vec_{_name}_f32x8_pfx"] = (_builder, VT_F32x8, _mask_f32x8)
-    _VEC_INTRINSICS[f"vec_{_name}_f64x4"] = (_builder, VT_F64x4, None)
-    _VEC_INTRINSICS[f"vec_{_name}_f64x4_pfx"] = (_builder, VT_F64x4, _f64_mask)
+    _VEC_INTRINSICS[f"vec_{_name}_f32x8"] = (_builder, VectorType(f32, [8]), None)
+    _VEC_INTRINSICS[f"vec_{_name}_f32x8_pfx"] = (_builder, VectorType(f32, [8]), _mask_f32x8)
+    _VEC_INTRINSICS[f"vec_{_name}_f64x4"] = (_builder, VectorType(f64, [4]), None)
+    _VEC_INTRINSICS[f"vec_{_name}_f64x4_pfx"] = (_builder, VectorType(f64, [4]), _f64_mask)
+
+
+def _build_mm256_storeu_ps(args):
+    load = llvm.LoadOp(args[1], VectorType(f32, [8]))
+    return (load, llvm.StoreOp(load.dereferenced_value, args[0]))
+
+
+def _build_mm256_fmadd_ps(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    l0 = llvm.LoadOp(args[0], VectorType(f32, [8]))
+    l1 = llvm.LoadOp(args[1], VectorType(f32, [8]))
+    l2 = llvm.LoadOp(args[2], VectorType(f32, [8]))
+    fma = vector.FMAOp(operands=[l1.dereferenced_value, l2.dereferenced_value, l0.dereferenced_value], result_types=[VectorType(f32, [8])])
+    return (zero, l0, l1, l2, fma, llvm.StoreOp(fma.res, args[0], [zero.result]))
+
+
+def _build_mm256_broadcast_ss(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    load = memref.LoadOp.get(args[1], [zero.result])
+    bcast = vector.BroadcastOp(operands=[load.results[0]], result_types=[VectorType(f32, [8])])
+    return (zero, load, bcast, llvm.StoreOp(bcast.results[0], args[0], [zero.result]))
+
+
+def _build_mm256_loadu_ps(args):
+    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
+    load = llvm.LoadOp(args[1], VectorType(f32, [8]))
+    return (zero, load, llvm.StoreOp(load.dereferenced_value, args[1], [zero.result]))
+
+
+_MM256_INTRINSICS: dict = {
+    "mm256_storeu_ps": _build_mm256_storeu_ps,
+    "mm256_fmadd_ps": _build_mm256_fmadd_ps,
+    "mm256_broadcast_ss": _build_mm256_broadcast_ss,
+    "mm256_loadu_ps": _build_mm256_loadu_ps,
+}
 
 
 class ConvertVecIntrinsic(RewritePattern):
@@ -142,9 +159,9 @@ class ConvertVecIntrinsic(RewritePattern):
         callee = op.callee.root_reference.data
 
         if callee == "vec_reduce_add_scl_f32x8":
-            return self._reduce(op, rewriter, VT_F32x8)
+            return self._reduce(op, rewriter, VectorType(f32, [8]))
         if callee == "vec_reduce_add_scl_f64x4":
-            return self._reduce(op, rewriter, VT_F64x4)
+            return self._reduce(op, rewriter, VectorType(f64, [4]))
 
         mm256_builder = _MM256_INTRINSICS.get(callee)
         if mm256_builder is not None:
@@ -176,82 +193,6 @@ class ConvertVecIntrinsic(RewritePattern):
         load = llvm.LoadOp(op.arguments[1], vt)
         reduce = vector.ReductionOp(load.dereferenced_value, vector.CombiningKindAttr([vector.CombiningKindFlag.ADD]), acc=op.arguments[0])
         rewriter.replace_matched_op((load, reduce, llvm.StoreOp(reduce.dest, acc_load.ptr)))
-
-
-def _build_mm256_storeu_ps(args):
-    load = llvm.LoadOp(args[1], VT_F32x8)
-    return (load, llvm.StoreOp(load.dereferenced_value, args[0]))
-
-
-def _build_mm256_fmadd_ps(args):
-    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
-    l0 = llvm.LoadOp(args[0], VT_F32x8)
-    l1 = llvm.LoadOp(args[1], VT_F32x8)
-    l2 = llvm.LoadOp(args[2], VT_F32x8)
-    fma = vector.FMAOp(operands=[l1.dereferenced_value, l2.dereferenced_value, l0.dereferenced_value], result_types=[VT_F32x8])
-    return (zero, l0, l1, l2, fma, llvm.StoreOp(fma.res, args[0], [zero.result]))
-
-
-def _build_mm256_broadcast_ss(args):
-    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
-    load = memref.LoadOp.get(args[1], [zero.result])
-    bcast = vector.BroadcastOp(operands=[load.results[0]], result_types=[VT_F32x8])
-    return (zero, load, bcast, llvm.StoreOp(bcast.results[0], args[0], [zero.result]))
-
-
-def _build_mm256_loadu_ps(args):
-    zero = arith.ConstantOp(IntegerAttr(0, IndexType()))
-    load = llvm.LoadOp(args[1], VT_F32x8)
-    return (zero, load, llvm.StoreOp(load.dereferenced_value, args[1], [zero.result]))
-
-
-_MM256_INTRINSICS: dict = {
-    "mm256_storeu_ps": _build_mm256_storeu_ps,
-    "mm256_fmadd_ps": _build_mm256_fmadd_ps,
-    "mm256_broadcast_ss": _build_mm256_broadcast_ss,
-    "mm256_loadu_ps": _build_mm256_loadu_ps,
-}
-
-
-#
-# memref to llvm rewrite patterns
-#
-
-
-class ConvertAllocOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: memref.AllocOp, rewriter: PatternRewriter):
-        memref_type = op.memref.type
-        if not isinstance(memref_type.memory_space, StringAttr):
-            return
-        if memref_type.memory_space.data != "DRAM":
-            return
-
-        assert all(size != -1 for size in memref_type.get_shape())
-
-        rewriter.replace_matched_op(
-            (
-                const_op := arith.ConstantOp(IntegerAttr(reduce(lambda x, y: x * y, memref_type.get_shape()), i64)),
-                alloc_op := llvm.CallOp("malloc", const_op.result, return_type=llvm.LLVMPointerType()),
-                UnrealizedConversionCastOp.get(alloc_op.returned, memref_type),
-            )
-        )
-
-
-class ConvertFreeOp(RewritePattern):
-    @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: memref.DeallocOp, rewriter: PatternRewriter):
-        if not isinstance(op.memref.type, MemRefType) or not isinstance(op.memref.type.memory_space, StringAttr):
-            return
-        if op.memref.type.memory_space.data != "DRAM":
-            return
-
-        rewriter.replace_matched_op(
-            (
-                cast_op := UnrealizedConversionCastOp.get([op.memref], [llvm.LLVMPointerType()]),
-                llvm.CallOp("free", cast_op.results[0]),
-            )
-        )
 
 
 @dataclass

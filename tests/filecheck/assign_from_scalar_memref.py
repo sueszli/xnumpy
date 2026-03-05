@@ -12,11 +12,11 @@ from exo import *
 # CHECK-NEXT:   %1 = arith.constant 4.200000e+01 : f32
 # CHECK:        "llvm.store"(%1, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:        cf.br ^bb0({{.*}} : i64)
-# CHECK:      ^bb0(%6 : i64):
-# CHECK:        cf.cond_br %7, ^bb1, ^bb2
+# CHECK:      ^bb0(%5 : i64):
+# CHECK:        cf.cond_br %6, ^bb1, ^bb2
 # CHECK:      ^bb1:
-# CHECK:        %8 = "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
-# CHECK:        "llvm.store"(%8, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
+# CHECK:        %7 = "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
+# CHECK:        "llvm.store"(%7, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:        cf.br ^bb0({{.*}} : i64)
 # CHECK:      ^bb2:
 # CHECK:        "llvm.call"(%offset_pointer_1) <{callee = @free, {{.*}}}> : (!llvm.ptr) -> ()
