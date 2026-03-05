@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from functools import reduce
+from functools import cache, reduce
 
 from xdsl.dialects import arith, func, llvm, memref, vector
 from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IndexType, IntegerAttr, MemRefType, StringAttr, UnrealizedConversionCastOp, VectorType, f32, f64, i32, i64
@@ -63,6 +63,7 @@ def _build_neg(args, vt):
     return [load, neg], neg.res, args[0]
 
 
+@cache
 def _build_binary(binop_cls):
     def build(args, vt):
         l1 = llvm.LoadOp(args[1], vt)
@@ -71,10 +72,6 @@ def _build_binary(binop_cls):
         return [l1, l2, result], result.res, args[0]
 
     return build
-
-
-_build_add = _build_binary(llvm.FAddOp)
-_build_mul = _build_binary(llvm.FMulOp)
 
 
 def _build_add_red(args, vt):
@@ -124,8 +121,8 @@ for _name, _builder, _f64_mask in [
     ("copy", _build_identity, _mask_f64x4_ext),
     ("load", _build_identity, _mask_f64x4_ext),
     ("store", _build_identity, _mask_f64x4),
-    ("add", _build_add, _mask_f64x4),
-    ("mul", _build_mul, _mask_f64x4),
+    ("add", _build_binary(llvm.FAddOp), _mask_f64x4),
+    ("mul", _build_binary(llvm.FMulOp), _mask_f64x4),
     ("neg", _build_neg, _mask_f64x4),
     ("brdcst_scl", _build_broadcast, _mask_f64x4),
     ("fmadd2", _build_fma, _mask_f64x4),
