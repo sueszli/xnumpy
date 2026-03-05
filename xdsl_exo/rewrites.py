@@ -282,13 +282,6 @@ class RewriteMemRefTypes(TypeConversionPattern):
 #
 
 
-class ConvertExternPass(ModulePass):
-    name = "convert-extern"
-
-    def apply(self, ctx: Context, m: ModuleOp) -> None:
-        PatternRewriteWalker(GreedyRewritePatternApplier([ConvertSelect()])).rewrite_module(m)
-
-
 class ConvertIntrinsicsPass(ModulePass):
     name = "convert-intrinsics"
 
