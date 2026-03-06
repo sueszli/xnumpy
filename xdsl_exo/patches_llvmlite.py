@@ -40,10 +40,6 @@ def _emit_op(op: Operation, builder: ir.IRBuilder, block_map: BlockMap, phi_map:
         case arith.MuliOp() | arith.AddiOp():
             method = "mul" if isinstance(op, arith.MuliOp) else "add"
             val_map[op.result] = getattr(builder, method)(val_map[op.lhs], val_map[op.rhs])
-        case arith.CmpiOp():
-            preds = {0: ("==", True), 1: ("!=", True), 2: ("<", True), 3: ("<=", True), 4: (">", True), 5: (">=", True), 6: ("<", False), 7: ("<=", False), 8: (">", False), 9: (">=", False)}
-            pred, is_signed = preds[op.predicate.value.data]
-            val_map[op.result] = (builder.icmp_signed if is_signed else builder.icmp_unsigned)(pred, val_map[op.lhs], val_map[op.rhs])
         case arith.IndexCastOp():
             src, dst_type = val_map[op.operands[0]], _convert_type(op.results[0].type)
             val_map[op.results[0]] = src if src.type == dst_type else builder.bitcast(src, dst_type)

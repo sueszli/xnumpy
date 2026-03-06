@@ -12,10 +12,10 @@ from exo import *
 # CHECK-NEXT:   {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:   cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT: ^bb0({{.*}} : i64):
-# CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:   {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb1({{.*}} : i64), ^bb2
 # CHECK-NEXT: ^bb1({{.*}} : i64):
-# CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:   {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb3, ^bb4
 # CHECK-NEXT: ^bb3:
 # CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0.000000e+00 : f32) : f32

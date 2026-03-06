@@ -12,10 +12,10 @@ from exo import DRAM, proc
 # CHECK-NEXT:     {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:     cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT:   ^bb0({{.*}} : i64):
-# CHECK-NEXT:     {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:     {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:     cf.cond_br {{.*}}, ^bb1({{.*}} : i64), ^bb2
 # CHECK-NEXT:   ^bb1({{.*}} : i64):
-# CHECK-NEXT:     {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:     {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:     cf.cond_br {{.*}}, ^bb3, ^bb4
 # CHECK-NEXT:   ^bb3:
 # CHECK-NEXT:     {{.*}} = llvm.mlir.constant(0.000000e+00 : f32) : f32
@@ -33,7 +33,7 @@ from exo import DRAM, proc
 # CHECK-NEXT:     "llvm.store"({{.*}}, %offset_pointer_6) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK-NEXT:     cf.br ^bb5({{.*}} : i64)
 # CHECK-NEXT:   ^bb5({{.*}} : i64):
-# CHECK-NEXT:     {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:     {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:     cf.cond_br {{.*}}, ^bb6, ^bb7
 # CHECK-NEXT:   ^bb6:
 # CHECK-NEXT:     {{.*}} = arith.index_cast {{.*}} : i64 to index

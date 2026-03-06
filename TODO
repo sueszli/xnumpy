@@ -1,0 +1,4 @@
+patches need to be split into: intrinsics, llvm patches, llvmlite patches
+
+try to emit exclusively llvm stuff in the llvm dialect
+also modify the flags we pass to mlir-opt when commpiling

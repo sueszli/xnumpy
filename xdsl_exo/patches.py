@@ -2,15 +2,15 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from xdsl.context import Context
-from xdsl.dialects import arith, builtin, memref, ptr, scf
-from xdsl.dialects.builtin import DYNAMIC_INDEX, I1, AnyFloatConstr, IntegerAttr, StringAttr, VectorType, i1, i32
+from xdsl.dialects import arith, builtin, llvm, memref, ptr, scf
+from xdsl.dialects.builtin import DYNAMIC_INDEX, I1, AnyFloatConstr, IndexType, IntegerAttr, StringAttr, VectorType, i1, i32, i64
 from xdsl.dialects.llvm import FastMathAttr, LLVMPointerType
 from xdsl.ir import BlockArgument, Dialect, Operation, OpResult, SSAValue
 from xdsl.irdl import AnyAttr, Attribute, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, traits_def
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 from xdsl.traits import Pure, SameOperandsAndResultType
-from xdsl.transforms.convert_memref_to_ptr import ConvertLoadPattern, ConvertStorePattern, ConvertSubviewPattern, get_bytes_offset, get_offset_pointer
+from xdsl.transforms.convert_memref_to_ptr import ConvertLoadPattern, ConvertStorePattern, ConvertSubviewPattern, get_offset_pointer
 from xdsl.utils.hints import isa
 
 
@@ -129,24 +129,30 @@ LLVMIntrinsics = Dialect(
 #
 
 
-def _loop_ub_as_index(index: SSAValue, rewriter: PatternRewriter) -> SSAValue | None:
+def _loop_ub_as_i64(index: SSAValue) -> SSAValue | None:
     # exo emits `%i_idx = arith.index_cast(%i_i64)` before using the IV as an index. unwrap it.
     iv = index.op.input if isinstance(index, OpResult) and isinstance(index.op, arith.IndexCastOp) else index
     if not isinstance(iv, BlockArgument) or iv.index != 0 or not isinstance(for_op := iv.block.parent_op(), scf.ForOp):
         return None
     ub = for_op.ub
-    return ub if isinstance(ub.type, builtin.IndexType) else rewriter.insert_op(arith.IndexCastOp(ub, builtin.IndexType())).result
+    return ub if ub.type == i64 else None
 
 
 def _get_dynamic_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indices: list[SSAValue], rewriter: PatternRewriter) -> SSAValue:
     shape = memref_type.get_shape()
     ins = rewriter.insert_op
-    iconst = lambda n: ins(arith.ConstantOp.from_int_and_width(n, builtin.IndexType())).result
+    iconst = lambda n: ins(llvm.ConstantOp(IntegerAttr(n, i64), i64)).result
+
+    def to_i64(val: SSAValue) -> SSAValue:
+        # unwrap arith.index_cast(i64 → index) to recover the original i64
+        if isinstance(val, OpResult) and isinstance(val.op, arith.IndexCastOp) and val.op.input.type == i64:
+            return val.op.input
+        return val
 
     def dim_size(i: int) -> SSAValue:  # static -> constant; dynamic -> scf.for ub
         if shape[i] != DYNAMIC_INDEX:
             return iconst(shape[i])
-        ub = _loop_ub_as_index(indices[i], rewriter)
+        ub = _loop_ub_as_i64(indices[i])
         assert ub is not None, f"dynamic dim {i}: index is not an scf.for induction variable"
         return ub
 
@@ -154,17 +160,21 @@ def _get_dynamic_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefTyp
     # strides[i] = strides[i+1]*dim[i+1]  (row-major, right-to-left)
     strides: list[SSAValue] = [iconst(1)] * len(shape)
     for i in range(len(shape) - 2, -1, -1):
-        strides[i] = ins(arith.MuliOp(strides[i + 1], dim_size(i + 1))).result
+        strides[i] = ins(llvm.MulOp(strides[i + 1], dim_size(i + 1))).res
 
     # flat offset = sum(indices[i] * strides[i])
     flat: SSAValue | None = None
     for idx, stride in zip(indices, strides):
-        term = ins(arith.MuliOp(idx, stride)).result
-        flat = term if flat is None else ins(arith.AddiOp(flat, term)).result
+        term = ins(llvm.MulOp(to_i64(idx), stride)).res
+        flat = term if flat is None else ins(llvm.AddOp(flat, term)).res
 
     # pointer arithmetic
     ptr_base = ins(ptr.ToPtrOp(memref_val)).res
-    return ptr_base if flat is None else get_offset_pointer(ptr_base, get_bytes_offset(flat, memref_type.element_type, rewriter), rewriter)
+    if flat is None:
+        return ptr_base
+    bytes_flat = ins(llvm.MulOp(flat, iconst(memref_type.element_type.size))).res
+    bytes_flat_idx = ins(arith.IndexCastOp(bytes_flat, IndexType())).result
+    return get_offset_pointer(ptr_base, bytes_flat_idx, rewriter)
 
 
 @dataclass
@@ -192,6 +202,14 @@ class DynamicConvertLoadPattern(RewritePattern):
             return
         target_ptr = _get_dynamic_target_ptr(op.memref, memref_type, list(op.indices), rewriter)
         rewriter.replace_op(op, ptr.LoadOp(target_ptr, memref_type.element_type))
+
+
+@dataclass
+class ConvertCmpiPattern(RewritePattern):
+    # arith.cmpi uses predicate ints 0-9 identical to llvm.icmp's ICmpPredicateFlag ints
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: arith.CmpiOp, rewriter: PatternRewriter, /):
+        rewriter.replace_matched_op(llvm.ICmpOp(op.lhs, op.rhs, IntegerAttr(op.predicate.value.data, i64)))
 
 
 @dataclass
