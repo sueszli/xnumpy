@@ -26,8 +26,9 @@ xdsl-exo bridges Exo and xDSL: it compiles Exo Python procedures to MLIR,
 enabling further lowering to LLVM IR (and hopefully one day also native code).
 
 usage:
-    `uv run xdsl-exo examples/demo.py`
-    `uv run python examples/demo.py`
+
+    $ uv run xdsl-exo examples/demo.py  # mlir
+    $ uv run python examples/demo.py    # jit execution
 
 how it works:
 
@@ -40,7 +41,7 @@ how it works:
           v
       MLIR LLVM dialect
           v
-    - - - - - - - - - - - - - - - - - - - - - - - - llvmlite binding
+    - - - - - - - - - - - - - - - - - - - - - - - - llvmlite
       Native code
 
 references:
