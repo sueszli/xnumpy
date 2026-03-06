@@ -22,10 +22,10 @@
                      <.'_.''
                        <'
 
+xdsl-exo bridges Exo and xDSL: it compiles Exo Python procedures to MLIR,                                                                                                                       
+enabling further lowering to LLVM IR (and hopefully one day also native code).
 
 usage: `uv run xdsl-exo examples/demo.py`
-
-## architecture
 
 how it works:
 
@@ -33,33 +33,18 @@ how it works:
           v
       LoopIR (exo's internal IR)
           v
-    - - - - - - - - - - - - - - - - - - - - - - - - xdsl-exo
+    - - - - - - - - - - - - - - - - - - - - - - - - xdsl-exo (potential exo upstream)
       MLIR module (func + memref + scf + arith dialects)
           v
       MLIR LLVM dialect
           v
-    - - - - - - - - - - - - - - - - - - - - - - - - llvmlite
+    - - - - - - - - - - - - - - - - - - - - - - - - llvmlite binding (potential xdsl upstream)
       Native code
 
-## long term goals
-
-- contribute to exo: emit llvm ir in addition to c
-- contribute to xdsl: get proper memref descriptor support
-- use llvmlite to jit instead of compiling mlir
-
-## references
-
-xdsl
+references:
 
 - https://xdsl.dev/
 - https://github.com/xdslproject/xdsl
-
-exo lang
-
 - https://exo-lang.dev/
 - https://github.com/exo-lang/exo/blob/main/docs/README.md
-- https://gist.github.com/sueszli/76acdde675002f64a34a6a3967cbb7fa
-
-previous iteration
-
-- https://github.com/kaylendog/exo-mlir
+- https://github.com/kaylendog/exo-mlir (previous iteration)
