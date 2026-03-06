@@ -19,7 +19,7 @@ from exo import *
 # CHECK:      ^bb0(%3 : i64):
 # CHECK:        cf.cond_br %4, ^bb1, ^bb2
 # CHECK:      ^bb1:
-# CHECK:        %5 = arith.muli %3, %1 : i64
+# CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @set_col({{.*}}) : (!llvm.ptr) -> ()
 # CHECK:      ^bb2:
 # CHECK-NEXT:   func.return

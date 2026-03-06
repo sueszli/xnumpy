@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from conftest import assert_match
 from exo import *
 
@@ -15,11 +14,6 @@ def call_add_one(x: f32[1] @ DRAM):
     add_one_scalar(x)
 
 
-@pytest.mark.xfail(
-    reason="BUG: _read_expr calls _type(Tensor) without mem_space on bare buffer args in sub-procedure calls",
-    raises=AssertionError,
-    strict=True,
-)
 def test_call_scalar_subproc():
     assert_match(call_add_one, x=[5.0])
 
@@ -35,11 +29,6 @@ def call_double(x: f32[8] @ DRAM):
     double_elements(8, x)
 
 
-@pytest.mark.xfail(
-    reason="BUG: _read_expr calls _type(Tensor) without mem_space on bare buffer args in sub-procedure calls",
-    raises=AssertionError,
-    strict=True,
-)
 def test_call_array_subproc():
     assert_match(call_double, x=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
 
@@ -60,11 +49,6 @@ def inc_then_double(x: f32[1] @ DRAM):
     double_val(x)
 
 
-@pytest.mark.xfail(
-    reason="BUG: _read_expr calls _type(Tensor) without mem_space on bare buffer args in sub-procedure calls",
-    raises=AssertionError,
-    strict=True,
-)
 def test_chained_subprocs():
     assert_match(inc_then_double, x=[5.0])
 
@@ -80,10 +64,5 @@ def call_add_buffers(out: f32[4] @ DRAM, a: f32[4] @ DRAM, b: f32[4] @ DRAM):
     add_buffers(4, out, a, b)
 
 
-@pytest.mark.xfail(
-    reason="BUG: _read_expr calls _type(Tensor) without mem_space on bare buffer args in sub-procedure calls",
-    raises=AssertionError,
-    strict=True,
-)
 def test_call_multi_buffer_subproc():
     assert_match(call_add_buffers, out=[0.0] * 4, a=[1.0, 2.0, 3.0, 4.0], b=[10.0, 20.0, 30.0, 40.0])

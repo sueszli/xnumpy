@@ -16,10 +16,10 @@ from exo import *
 # CHECK-NEXT: }
 # CHECK:      func.func @window_row(%offset_pointer : !llvm.ptr) {
 # CHECK:        cf.br ^bb0(%0 : i64)
-# CHECK:      ^bb0(%4 : i64):
-# CHECK:        cf.cond_br %5, ^bb1, ^bb2
+# CHECK:      ^bb0({{.*}} : i64):
+# CHECK:        cf.cond_br {{.*}}, ^bb1, ^bb2
 # CHECK:      ^bb1:
-# CHECK:        %6 = arith.muli %4, %3 : i64
+# CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @set_row({{.*}}) : (!llvm.ptr) -> ()
 # CHECK:      ^bb2:
 # CHECK-NEXT:   func.return

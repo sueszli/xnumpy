@@ -63,30 +63,28 @@ def _window_access(access: object, expr_fn: Callable[[object], SSAValue]) -> SSA
             assert False
 
 
-def _window_strides(sizes: list[SSAValue | int], emit: Callable[[Operation], SSAValue]) -> list[SSAValue | int]:
-    # stride[i] = product(sizes[i+1:]), computed right-to-left
-    strides: list[SSAValue | int] = [1]
-    for size in reversed(sizes):
-        last = strides[0]
-        if isinstance(last, int) and isinstance(size, int):
-            strides.insert(0, last * size)
-            continue
-        if isinstance(last, int):
-            last = emit(ConstantOp(IntegerAttr(last, i64)))
-        if isinstance(size, int):
-            size = emit(ConstantOp(IntegerAttr(size, i64)))
-        strides.insert(0, emit(MuliOp(operand1=last, operand2=size)))
-    return strides
 
+def _coerce_arg(
+    arg_val: SSAValue,
+    callee_arg: object,
+    callee_body: list,
+    type_fn: Callable[[object, StringAttr | None], Attribute],
+    emit_fn: Callable[[Operation], SSAValue],
+) -> SSAValue:
+    # reconcile mlir type and shape mismatches (e.g. caller has memref<8xf32>, callee expects memref<?xf32>) via memref.cast
+    mem_space = StringAttr(callee_arg.mem.name()) if hasattr(callee_arg, "mem") else None
+    callee_type = type_fn(callee_arg.type, mem_space)
 
-def _window_offsets(indices: list[SSAValue], strides: list[SSAValue | int], emit: Callable[[Operation], SSAValue]) -> list[SSAValue]:
-    # offset[i] = index[i] * stride[i]
-    offsets: list[SSAValue] = []
-    for index, stride in zip(indices, strides):
-        if isinstance(stride, int):
-            stride = emit(ConstantOp(IntegerAttr(stride, i64)))
-        offsets.append(emit(MuliOp(operand1=index, operand2=stride)))
-    return offsets
+    # scalars passed by reference (callee writes to them) must arrive as memref<1xT>
+    scalar_passed_by_ref = not isinstance(callee_type, MemRefType) and _is_mutated(repr(callee_arg.name), callee_body)
+    if scalar_passed_by_ref:
+        callee_type = MemRefType(callee_type, [1], NoneAttr())
+
+    shape_mismatch = isinstance(arg_val.type, MemRefType) and isinstance(callee_type, MemRefType) and arg_val.type != callee_type
+    if shape_mismatch:
+        return emit_fn(memref.CastOp.get(arg_val, callee_type))
+
+    return arg_val
 
 
 def _to_index_list(values: list[SSAValue | int], emit: Callable[[Operation], SSAValue]) -> list:
@@ -248,7 +246,7 @@ class IRGenerator:
 
         if not isinstance(operand.type, MemRefType):
             return operand
-        if isinstance(read.type, T.Window):
+        if isinstance(read.type, (T.Window, T.Tensor)):
             return operand
         if operand.type == self._type(read.type):
             return operand
@@ -298,19 +296,15 @@ class IRGenerator:
         assert False
 
     def _expr_window(self, window: LoopIR.WindowExpr) -> SSAValue:
-        # lower window expression to stride/offset computation + memref.subview
+        # lower window expression to memref.subview
         indices = [_window_access(access, self._expr) for access in window.idx]
         source = self._syms[repr(window.name)]
         dest_type = self._type(window.type.as_tensor, source.type.memory_space)
-        input_sizes = self._shape(self._types[repr(window.name)], emit=True)
         output_sizes = self._shape(window.type.as_tensor, emit=True)
 
-        # compute strides/offsets in i64, then cast to index for subview
-        strides = _window_strides(input_sizes, self._emit)
-        offsets = _window_offsets(indices, strides, self._emit)
-        strides_idx = _to_index_list(strides, self._emit)
-        offsets_idx = _to_index_list(offsets, self._emit)
+        offsets_idx = _to_index_list(indices, self._emit)
         sizes_idx = _to_index_list(output_sizes, self._emit)
+        strides_idx = _to_index_list([1] * len(indices), self._emit)
 
         self.builder.insert(subview := memref.SubviewOp.get(source, offsets_idx, sizes_idx, strides_idx, dest_type))
         return subview.result
@@ -458,6 +452,7 @@ class IRGenerator:
         if call.f.instr is None:
             self._procedure(call.f)
             assert len(call.args) == len(call.f.args)
+            args = [_coerce_arg(arg_val, callee_arg, call.f.body, self._type, self._emit) for arg_val, callee_arg in zip(args, call.f.args)]
         elif call.f.name not in self.seen_extern_decls:
             self.seen_extern_decls.add(call.f.name)
             input_types = [SSAValue.get(arg).type for arg in args]

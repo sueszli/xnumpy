@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from conftest import assert_match
 from exo import *
 
@@ -63,20 +62,32 @@ def dynamic_2d_copy(M: size, N: size, dst: f32[M, N] @ DRAM, src: f32[M, N] @ DR
             dst[i, j] = src[i, j]
 
 
-@pytest.mark.xfail(
-    reason="BUG: ConvertMemRefToPtr asserts positive strides, but dynamic 2D memref has stride -1",
-    raises=AssertionError,
-    strict=True,
-)
 def test_dynamic_2d_3x4():
     src = [float(x) for x in range(12)]
     assert_match(dynamic_2d_copy, M=3, N=4, dst=[0.0] * 12, src=src)
 
 
-@pytest.mark.xfail(
-    reason="BUG: ConvertMemRefToPtr asserts positive strides, but dynamic 2D memref has stride -1",
-    raises=AssertionError,
-    strict=True,
-)
 def test_dynamic_2d_1x1():
     assert_match(dynamic_2d_copy, M=1, N=1, dst=[0.0], src=[42.0])
+
+
+def test_dynamic_2d_1x8():
+    src = [float(x) for x in range(8)]
+    assert_match(dynamic_2d_copy, M=1, N=8, dst=[0.0] * 8, src=src)
+
+
+def test_dynamic_2d_5x7():
+    src = [float(x) for x in range(35)]
+    assert_match(dynamic_2d_copy, M=5, N=7, dst=[0.0] * 35, src=src)
+
+
+@proc
+def dynamic_2d_scale(M: size, N: size, dst: f32[M, N] @ DRAM, src: f32[M, N] @ DRAM, s: f32[1] @ DRAM):
+    for i in seq(0, M):
+        for j in seq(0, N):
+            dst[i, j] = src[i, j] * s[0]
+
+
+def test_dynamic_2d_scale():
+    src = [float(x) for x in range(12)]
+    assert_match(dynamic_2d_scale, M=3, N=4, dst=[0.0] * 12, src=src, s=[2.0])

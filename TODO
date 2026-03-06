@@ -1,6 +1,6 @@
-memref doesnt support strides (see examples/window_roundtrip.py)
+across all lit tests, change %4 and numbered stuff to {{.*}}
 
-# e2e test bugs
+memref doesnt support strides (see examples/window_roundtrip.py)
 
 bare buffer args in sub-procedure calls (6 tests)
     _read_expr calls _type(Tensor) without mem_space on bare buffer args
@@ -16,7 +16,8 @@ non-zero-offset window subview (1 test)
 dynamic 2D memref strides (2 tests)
     ConvertMemRefToPtr asserts positive strides, but dynamic 2D memrefs
     (memref<?x?xf32>) get stride -1 and fail.
-    Affects: test_multi_dim (test_dynamic_2d_3x4, test_dynamic_2d_1x1).
+    Affects: test_multi_dim (test_dynamic_2d_3x4, test_dynamic_2d_1x1,
+    test_dynamic_2d_1x8, test_dynamic_2d_5x7, test_dynamic_2d_scale).
 
 
 ## final step

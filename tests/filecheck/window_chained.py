@@ -11,12 +11,15 @@ from exo import *
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }
 # CHECK:      func.func @inner(%offset_pointer : !llvm.ptr) {
-# CHECK:        %0 = arith.constant 16 : i64
+# CHECK:        arith.constant 1 : i64
+# CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @set_first({{.*}}) : (!llvm.ptr) -> ()
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }
 # CHECK:      func.func @outer(%offset_pointer : !llvm.ptr) {
-# CHECK:        %0 = arith.constant 96 : i64
+# CHECK:        arith.constant 2 : i64
+# CHECK:        arith.constant 16 : index
+# CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @inner({{.*}}) : (!llvm.ptr) -> ()
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }

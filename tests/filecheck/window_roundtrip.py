@@ -11,7 +11,8 @@ from exo import *
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }
 # CHECK:      func.func @window_roundtrip(%offset_pointer : !llvm.ptr) {
-# CHECK:        arith.constant 32 : i64
+# CHECK:        arith.constant 2 : i64
+# CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @set_element({{.*}}) : (!llvm.ptr) -> ()
 # CHECK:        "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
 # CHECK:        "llvm.store"({{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()

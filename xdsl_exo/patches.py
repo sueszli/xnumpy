@@ -2,15 +2,15 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from xdsl.context import Context
-from xdsl.dialects import builtin, memref, ptr
-from xdsl.dialects.builtin import I1, AnyFloatConstr, IntegerAttr, VectorType, i32
+from xdsl.dialects import arith, builtin, memref, ptr, scf
+from xdsl.dialects.builtin import DYNAMIC_INDEX, I1, AnyFloatConstr, IntegerAttr, VectorType, i32
 from xdsl.dialects.llvm import FastMathAttr, LLVMPointerType
-from xdsl.ir import Dialect, Operation, SSAValue
+from xdsl.ir import BlockArgument, Dialect, Operation, OpResult, SSAValue
 from xdsl.irdl import Attribute, IRDLOperation, ParsePropInAttrDict, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, traits_def
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, op_type_rewrite_pattern
 from xdsl.traits import Pure, SameOperandsAndResultType
-from xdsl.transforms.convert_memref_to_ptr import ConvertLoadPattern, ConvertStorePattern, ConvertSubviewPattern
+from xdsl.transforms.convert_memref_to_ptr import ConvertLoadPattern, ConvertStorePattern, ConvertSubviewPattern, get_bytes_offset, get_offset_pointer
 from xdsl.utils.hints import isa
 
 
@@ -86,11 +86,63 @@ LLVMIntrinsics = Dialect(
 #
 
 
+def _loop_ub_as_index(index: SSAValue, rewriter: PatternRewriter) -> SSAValue | None:
+    # unwrap index_cast(iv) -> iv; Exo emits i64 loop vars cast to index
+    iv = index.op.input if isinstance(index, OpResult) and isinstance(index.op, arith.IndexCastOp) else index
+    if not isinstance(iv, BlockArgument) or iv.index != 0 or not isinstance(for_op := iv.block.parent_op(), scf.ForOp):
+        return None
+    ub = for_op.ub
+    return ub if isinstance(ub.type, builtin.IndexType) else rewriter.insert_op(arith.IndexCastOp(ub, builtin.IndexType())).result
+
+
+def _get_dynamic_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indices: list[SSAValue], rewriter: PatternRewriter) -> SSAValue:
+    shape, ins = memref_type.get_shape(), rewriter.insert_op
+    iconst = lambda n: ins(arith.ConstantOp.from_int_and_width(n, builtin.IndexType())).result
+    def dim_size(i: int) -> SSAValue:  # static -> constant; dynamic -> scf.for ub
+        if shape[i] != DYNAMIC_INDEX: return iconst(shape[i])
+        ub = _loop_ub_as_index(indices[i], rewriter)
+        assert ub is not None, f"Dynamic dim {i}: index is not an scf.for induction variable"
+        return ub
+    # strides[rank-1]=1, strides[i]=strides[i+1]*dim[i+1]  (row-major, right-to-left)
+    strides: list[SSAValue] = [iconst(1)] * len(shape)
+    for i in range(len(shape) - 2, -1, -1):
+        strides[i] = ins(arith.MuliOp(strides[i + 1], dim_size(i + 1))).result
+    # flat = sum(indices[i] * strides[i])
+    flat: SSAValue | None = None
+    for idx, stride in zip(indices, strides):
+        term = ins(arith.MuliOp(idx, stride)).result
+        flat = term if flat is None else ins(arith.AddiOp(flat, term)).result
+    ptr_base = ins(ptr.ToPtrOp(memref_val)).res
+    return ptr_base if flat is None else get_offset_pointer(ptr_base, get_bytes_offset(flat, memref_type.element_type, rewriter), rewriter)
+
+
+@dataclass
+class DynamicConvertStorePattern(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: memref.StoreOp, rewriter: PatternRewriter, /):
+        assert isa(memref_type := op.memref.type, builtin.MemRefType)
+        if memref_type.has_static_shape() or not isa(memref_type.layout, builtin.NoneAttr):
+            return
+        target_ptr = _get_dynamic_target_ptr(op.memref, memref_type, list(op.indices), rewriter)
+        rewriter.replace_op(op, ptr.StoreOp(target_ptr, op.value))
+
+
+@dataclass
+class DynamicConvertLoadPattern(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: memref.LoadOp, rewriter: PatternRewriter, /):
+        assert isa(memref_type := op.memref.type, builtin.MemRefType)
+        if memref_type.has_static_shape() or not isa(memref_type.layout, builtin.NoneAttr):
+            return
+        target_ptr = _get_dynamic_target_ptr(op.memref, memref_type, list(op.indices), rewriter)
+        rewriter.replace_op(op, ptr.LoadOp(target_ptr, memref_type.element_type))
+
+
 @dataclass
 class ConvertCastOp(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.CastOp, rewriter: PatternRewriter, /):
-        assert isa(op.source.type, memref.MemRefType)
+        assert isa(op.source.type, builtin.MemRefType)
         rewriter.replace_matched_op((), (op.source,))
 
 
@@ -115,6 +167,8 @@ class ExtendedConvertMemRefToPtr(ModulePass):
         PatternRewriteWalker(
             GreedyRewritePatternApplier(
                 [
+                    DynamicConvertStorePattern(),
+                    DynamicConvertLoadPattern(),
                     ConvertStorePattern(),
                     ConvertLoadPattern(),
                     ConvertSubviewPattern(),
