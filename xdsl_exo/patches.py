@@ -91,8 +91,7 @@ class SelectOp(IRDLOperation):
     assembly_format = "$cond `,` $lhs `,` $rhs attr-dict `:` type($cond) `,` type($res)"
 
     def __init__(self, cond: Operation | SSAValue, lhs: Operation | SSAValue, rhs: Operation | SSAValue):
-        lhs_val = SSAValue.get(lhs)
-        super().__init__(operands=[cond, lhs, rhs], result_types=[lhs_val.type])
+        super().__init__(operands=[cond, lhs, rhs], result_types=[SSAValue.get(lhs).type])
 
 
 @irdl_op_definition
