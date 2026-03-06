@@ -7,14 +7,14 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @alloc_free({{.*}} : i64, %offset_pointer : !llvm.ptr) {
-# CHECK-NEXT:   {{.*}} = arith.constant 0 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 1 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 4 : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0) : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:   cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT: ^bb0({{.*}} : i64):
 # CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb1, ^bb2
 # CHECK-NEXT: ^bb1:
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(4) : i64
 # CHECK-NEXT:   %offset_pointer_1 = "llvm.call"({{.*}}) <{callee = @malloc, fastmathFlags = #llvm.fastmath<none>, CConv = #llvm.cconv<ccc>, op_bundle_sizes = array<i32>, operandSegmentSizes = array<i32: 1, 0>, TailCallKind = #llvm.tailcallkind<none>}> : (i64) -> !llvm.ptr
 # CHECK-NEXT:   {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:   %bytes_per_element = arith.constant 4 : index

@@ -7,10 +7,9 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @assign_2d(%offset_pointer : !llvm.ptr) {
-# CHECK-NEXT:   {{.*}} = arith.constant 0 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 4 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 1 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 0.000000e+00 : f32
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0) : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(4) : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:   cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT: ^bb0({{.*}} : i64):
 # CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
@@ -19,6 +18,7 @@ from exo import *
 # CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb3, ^bb4
 # CHECK-NEXT: ^bb3:
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0.000000e+00 : f32) : f32
 # CHECK-NEXT:   {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:   {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:   %pointer_dim_stride = arith.constant 4 : index

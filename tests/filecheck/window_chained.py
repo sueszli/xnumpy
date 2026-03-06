@@ -6,18 +6,18 @@ from exo import *
 
 
 # CHECK:      func.func @set_first(%offset_pointer : !llvm.ptr) {
-# CHECK:        {{.*}} = arith.constant 1.000000e+00 : f32
+# CHECK:        {{.*}} = llvm.mlir.constant(1.000000e+00 : f32) : f32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }
 # CHECK:      func.func @inner(%offset_pointer : !llvm.ptr) {
-# CHECK:        arith.constant 1 : i64
+# CHECK:        llvm.mlir.constant(1) : i64
 # CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @set_first({{.*}}) : (!llvm.ptr) -> ()
 # CHECK-NEXT:   func.return
 # CHECK-NEXT: }
 # CHECK:      func.func @outer(%offset_pointer : !llvm.ptr) {
-# CHECK:        arith.constant 2 : i64
+# CHECK:        llvm.mlir.constant(2) : i64
 # CHECK:        arith.constant 16 : index
 # CHECK:        arith.muli {{.*}}, {{.*}} : index
 # CHECK:        func.call @inner({{.*}}) : (!llvm.ptr) -> ()

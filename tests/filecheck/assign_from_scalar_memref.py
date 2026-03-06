@@ -7,9 +7,9 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @assign_from_scalar_memref(%offset_pointer : !llvm.ptr) {
-# CHECK-NEXT:   {{.*}} = arith.constant 4 : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(4) : i64
 # CHECK-NEXT:   %offset_pointer_1 = "llvm.call"({{.*}}) <{callee = @malloc, {{.*}}}> : (i64) -> !llvm.ptr
-# CHECK-NEXT:   {{.*}} = arith.constant 4.200000e+01 : f32
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(4.200000e+01 : f32) : f32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:        cf.br ^bb0({{.*}} : i64)
 # CHECK:      ^bb0({{.*}} : i64):

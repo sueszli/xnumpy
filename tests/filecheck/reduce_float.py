@@ -12,7 +12,7 @@ from exo import *
 # CHECK:      ^bb1:
 # CHECK:        {{.*}} = "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
 # CHECK:        {{.*}} = "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
-# CHECK-NEXT:   {{.*}} = arith.addf {{.*}}, {{.*}} : f32
+# CHECK-NEXT:   {{.*}} = llvm.fadd {{.*}}, {{.*}} : f32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:      ^bb2:
 # CHECK-NEXT:   func.return

@@ -8,9 +8,9 @@ from exo import *
 # CHECK:      func.func @f64_arithmetic({{.*}}) {
 # CHECK:        "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f64
 # CHECK:        "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f64
-# CHECK:        arith.addf {{.*}} : f64
+# CHECK:        llvm.fadd {{.*}} : f64
 # CHECK:        "llvm.store"({{.*}}) <{ordering = 0 : i64}> : (f64, !llvm.ptr) -> ()
-# CHECK:        arith.mulf {{.*}} : f64
+# CHECK:        llvm.fmul {{.*}} : f64
 # CHECK:        "llvm.store"({{.*}}) <{ordering = 0 : i64}> : (f64, !llvm.ptr) -> ()
 @proc
 def f64_arithmetic(out: f64[1] @ DRAM, a: f64[1] @ DRAM, b: f64[1] @ DRAM):

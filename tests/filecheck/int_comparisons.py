@@ -6,11 +6,11 @@ from exo import *
 
 
 # CHECK:      func.func @int_comparisons(%offset_pointer : !llvm.ptr, {{.*}} : i64, {{.*}} : i64) {
-# CHECK-NEXT:   {{.*}} = arith.cmpi eq, {{.*}}, {{.*}} : i64
+# CHECK-NEXT:   {{.*}} = llvm.icmp "eq" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb0, ^bb1
-# CHECK:        {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
+# CHECK:        {{.*}} = llvm.icmp "slt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb2, ^bb3
-# CHECK:        {{.*}} = arith.cmpi sgt, {{.*}}, {{.*}} : i64
+# CHECK:        {{.*}} = llvm.icmp "sgt" {{.*}}, {{.*}} : i64
 # CHECK-NEXT:   cf.cond_br {{.*}}, ^bb4, ^bb5
 @proc
 def int_comparisons(out: i32[1] @ DRAM, a: index, b: index):

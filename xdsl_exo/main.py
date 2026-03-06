@@ -18,7 +18,7 @@ from exo.main import get_procs_from_module, load_user_code
 from xdsl.builder import Builder
 from xdsl.context import Context
 from xdsl.dialects import arith, func, llvm, memref, ptr, scf
-from xdsl.dialects.arith import AddfOp, AddiOp, AndIOp, CmpfOp, CmpiOp, ConstantOp, DivfOp, DivSIOp, FastMathFlagsAttr, MulfOp, MuliOp, NegfOp, OrIOp, RemSIOp, SubfOp, SubiOp
+
 from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, FunctionType, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
 from xdsl.dialects.func import CallOp, FuncOp, ReturnOp
 from xdsl.dialects.scf import ForOp, IfOp, YieldOp
@@ -34,7 +34,7 @@ from xdsl.transforms.convert_scf_to_cf import ConvertScfToCf
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.patches import ExtendedConvertMemRefToPtr, LLVMIntrinsics
+from xdsl_exo.patches import ExtendedConvertMemRefToPtr, FCmpOp, FNegOp, LLVMIntrinsics, SelectOp
 from xdsl_exo.patches_llvmlite import jit_compile, to_llvmlite
 from xdsl_exo.rewrites import ConvertVecIntrinsic, RewriteMemRefTypes
 
@@ -198,7 +198,7 @@ class IRGenerator:
 
     def _memref_load(self, memref_val: SSAValue, idx: list[SSAValue]) -> SSAValue:
         if len(idx) == 0:
-            idx = [self._emit(arith.ConstantOp(IntegerAttr(0, i64)))]
+            idx = [self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))]
         indices = [self._emit(arith.IndexCastOp(index, IndexType())) for index in idx]
         self.builder.insert(load := memref.LoadOp.get(memref_val, indices))
         return load.res
@@ -207,14 +207,15 @@ class IRGenerator:
         # emit memref.store with i64->index casts, handling scalar memref cases
         if len(idx) == 0:
             assert isinstance(memref_val.type, MemRefType) and memref_val.type.get_shape() == (1,)
-            idx = [self._emit(arith.ConstantOp(IntegerAttr(0, i64)))]
+            idx = [self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))]
 
         index_indices = [self._emit(arith.IndexCastOp(index, IndexType())) for index in idx]
 
         # if value is a scalar memref, load it first
         if isinstance(value.type, MemRefType):
             assert value.type.get_shape() == (1,)
-            zero_idx = self._emit(arith.ConstantOp(IntegerAttr(0, IndexType())))
+            zero_i64 = self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))
+            zero_idx = self._emit(arith.IndexCastOp(zero_i64, IndexType()))
             self.builder.insert(load := memref.LoadOp.get(value, [zero_idx]))
             value = load.res
 
@@ -225,7 +226,7 @@ class IRGenerator:
     #
 
     def _expr_const(self, const: LoopIR.Const) -> SSAValue:
-        # lower loopir literal to arith.constant op
+        # lower loopir literal to llvm.mlir.constant op
         mlir_type = self._type(const.type)
 
         if mlir_type in [f16, f32, f64]:
@@ -237,7 +238,7 @@ class IRGenerator:
         else:
             assert False
 
-        return self._emit(ConstantOp(attr, mlir_type))
+        return self._emit(llvm.ConstantOp(attr, mlir_type))
 
     def _expr_read(self, read: LoopIR.Read) -> SSAValue:
         # lower loopir read to arith/memref ops
@@ -253,33 +254,32 @@ class IRGenerator:
         return self._memref_load(operand, idx)
 
     def _expr_usub(self, usub: LoopIR.USub) -> SSAValue:
-        # lower unary negation to negf (float) or 0-x subi (int)
+        # lower unary negation to llvm.fneg (float) or 0-x llvm.sub (int)
         expr = self._expr(usub.arg)
         mlir_type = self._type(usub.type)
 
         if mlir_type in [f16, f32, f64]:
-            return self._emit(NegfOp(expr))
+            return self._emit(FNegOp(expr))
         elif mlir_type in [i8, i16, i32, i64]:
-            zero = self._emit(ConstantOp(IntegerAttr(0, mlir_type)))
-            return self._emit(SubiOp(zero, expr, result_type=mlir_type))
+            zero = self._emit(llvm.ConstantOp(IntegerAttr(0, mlir_type), mlir_type))
+            return self._emit(llvm.SubOp(zero, expr))
         else:
             assert False
 
     @staticmethod
     def _cmp_binop(lhs: SSAValue, rhs: SSAValue, op: str, emit: Callable[[Operation], SSAValue]) -> SSAValue:
-        # lower comparison/logical binop to cmpi, cmpf, andi, or ori
-        bool_ops = {"and": AndIOp, "or": OrIOp}
-        integer_cmp_table = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
+        integer_cmp_table = {"==": 0, "!=": 1, "<": 2, "<=": 3, ">": 4, ">=": 5}
         float_cmp_table = {"==": "oeq", "!=": "one", "<": "olt", "<=": "ole", ">": "ogt", ">=": "oge"}
         assert lhs.type == rhs.type
         if lhs.type == i1:
+            bool_ops = {"and": llvm.AndOp, "or": llvm.OrOp}
             return emit(bool_ops[op](lhs, rhs))
         if lhs.type in [i8, i16, i32, i64]:
-            return emit(CmpiOp(lhs, rhs, integer_cmp_table[op]))
-        return emit(CmpfOp(lhs, rhs, float_cmp_table[op]))
+            return emit(llvm.ICmpOp(lhs, rhs, IntegerAttr(integer_cmp_table[op], i64)))
+        return emit(FCmpOp(lhs, rhs, float_cmp_table[op]))
 
     def _expr_binop(self, binop: LoopIR.BinOp) -> SSAValue:
-        # lower binary op to typed arith op
+        # lower binary op to typed llvm op
         mlir_type = self._type(binop.type)
         lhs = self._expr(binop.lhs)
         rhs = self._expr(binop.rhs)
@@ -287,12 +287,12 @@ class IRGenerator:
         if mlir_type == i1:
             return self._cmp_binop(lhs, rhs, binop.op, self._emit)
 
-        float_ops = {"+": AddfOp, "-": SubfOp, "*": MulfOp, "/": DivfOp}
-        int_ops = {"+": AddiOp, "-": SubiOp, "*": MuliOp, "/": DivSIOp, "%": RemSIOp}
+        float_ops = {"+": llvm.FAddOp, "-": llvm.FSubOp, "*": llvm.FMulOp, "/": llvm.FDivOp}
+        int_ops = {"+": llvm.AddOp, "-": llvm.SubOp, "*": llvm.MulOp, "/": llvm.SDivOp, "%": llvm.SRemOp}
         if mlir_type in [f16, f32, f64]:
-            return self._emit(float_ops[binop.op](lhs, rhs, result_type=mlir_type, flags=FastMathFlagsAttr("none")))
+            return self._emit(float_ops[binop.op](lhs, rhs))
         if mlir_type in [i8, i16, i32, i64]:
-            return self._emit(int_ops[binop.op](lhs, rhs, result_type=mlir_type))
+            return self._emit(int_ops[binop.op](lhs, rhs))
         assert False
 
     def _expr_window(self, window: LoopIR.WindowExpr) -> SSAValue:
@@ -315,8 +315,8 @@ class IRGenerator:
 
         if extern.f.name() == "select":
             # select(a, b, c, d) -> (a < b) ? c : d
-            cmp = self._emit(CmpfOp(args[0], args[1], "olt"))
-            return self._emit(arith.SelectOp(cmp, args[2], args[3]))
+            cmp = self._emit(FCmpOp(args[0], args[1], "olt"))
+            return self._emit(SelectOp(cmp, args[2], args[3]))
 
         output_type = self._type(extern.f.typecheck(extern.args))
         return self._emit(CallOp(extern.f.name(), args, [output_type]))
@@ -358,11 +358,10 @@ class IRGenerator:
 
         current = self._memref_load(memref_val, idx)
         if value.type in [f16, f32, f64]:
-            add_op = AddfOp(current, value, result_type=value.type, flags=FastMathFlagsAttr("none"))
+            result = self._emit(llvm.FAddOp(current, value))
         else:
-            add_op = AddiOp(current, value, result_type=value.type)
-        self.builder.insert(add_op)
-        self._memref_store(add_op.result, memref_val, idx)
+            result = self._emit(llvm.AddOp(current, value))
+        self._memref_store(result, memref_val, idx)
 
     def _stmt_if(self, if_stmt: LoopIR.If) -> None:
         # lower if/else to scf.if with true and false regions
@@ -388,7 +387,7 @@ class IRGenerator:
         lo = self._expr(for_stmt.lo)
         hi = self._expr(for_stmt.hi)
         assert lo.type == hi.type
-        step = self._emit(ConstantOp(IntegerAttr(1, lo.type)))
+        step = self._emit(llvm.ConstantOp(IntegerAttr(1, lo.type), lo.type))
 
         with self._tmp_state():
             loop_block = Block(arg_types=[lo.type])
@@ -420,10 +419,10 @@ class IRGenerator:
 
         if mem_name == "DRAM":
             elem_bytes = {f16: 2, f32: 4, f64: 8, i8: 1, i16: 2, i32: 4, i64: 8}[mlir_type.element_type]
-            size_val = self._emit(arith.ConstantOp(IntegerAttr(total_elements * elem_bytes, i64)))  # malloc takes bytes
+            size_val = self._emit(llvm.ConstantOp(IntegerAttr(total_elements * elem_bytes, i64), i64))  # malloc takes bytes
             raw_ptr = self._emit(llvm.CallOp("malloc", size_val, return_type=llvm.LLVMPointerType()))
         else:
-            size_val = self._emit(arith.ConstantOp(IntegerAttr(total_elements, i64)))  # alloca takes element count
+            size_val = self._emit(llvm.ConstantOp(IntegerAttr(total_elements, i64), i64))  # alloca takes element count
             raw_ptr = self._emit(llvm.AllocaOp(size_val, mlir_type.element_type))
 
         result = self._emit(UnrealizedConversionCastOp.get(raw_ptr, mlir_type))

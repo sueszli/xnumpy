@@ -7,7 +7,7 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @zero_index_read(%offset_pointer : !llvm.ptr, %offset_pointer_1 : !llvm.ptr) {
-# CHECK-NEXT:   {{.*}} = arith.constant 0 : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0) : i64
 # CHECK-NEXT:   {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:   %bytes_per_element = arith.constant 4 : index
 # CHECK-NEXT:   %scaled_pointer_offset = arith.muli {{.*}}, %bytes_per_element : index
@@ -16,8 +16,8 @@ from exo import *
 # CHECK-NEXT:   %offset_pointer_4 = arith.addi %offset_pointer_3, %offset_pointer_2 : i64
 # CHECK-NEXT:   %offset_pointer_5 = "llvm.inttoptr"(%offset_pointer_4) : (i64) -> !llvm.ptr
 # CHECK-NEXT:   {{.*}} = "llvm.load"(%offset_pointer_5) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
-# CHECK-NEXT:   {{.*}} = arith.constant 1.000000e+00 : f32
-# CHECK-NEXT:   {{.*}} = arith.addf {{.*}}, {{.*}} : f32
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(1.000000e+00 : f32) : f32
+# CHECK-NEXT:   {{.*}} = llvm.fadd {{.*}}, {{.*}} : f32
 # CHECK-NEXT:   %offset_pointer_6 = "llvm.ptrtoint"(%offset_pointer_1) : (!llvm.ptr) -> i64
 # CHECK-NEXT:   %offset_pointer_7 = arith.addi %offset_pointer_6, %offset_pointer_2 : i64
 # CHECK-NEXT:   %offset_pointer_8 = "llvm.inttoptr"(%offset_pointer_7) : (i64) -> !llvm.ptr

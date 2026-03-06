@@ -7,10 +7,9 @@ from exo import DRAM, proc
 
 # CHECK: builtin.module {
 # CHECK-NEXT:   func.func @fixed_matmul(%offset_pointer : !llvm.ptr, %offset_pointer_1 : !llvm.ptr, %offset_pointer_2 : !llvm.ptr) {
-# CHECK-NEXT:     {{.*}} = arith.constant 0 : i64
-# CHECK-NEXT:     {{.*}} = arith.constant 16 : i64
-# CHECK-NEXT:     {{.*}} = arith.constant 1 : i64
-# CHECK-NEXT:     {{.*}} = arith.constant 0.000000e+00 : f32
+# CHECK-NEXT:     {{.*}} = llvm.mlir.constant(0) : i64
+# CHECK-NEXT:     {{.*}} = llvm.mlir.constant(16) : i64
+# CHECK-NEXT:     {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:     cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT:   ^bb0({{.*}} : i64):
 # CHECK-NEXT:     {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
@@ -19,6 +18,7 @@ from exo import DRAM, proc
 # CHECK-NEXT:     {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64
 # CHECK-NEXT:     cf.cond_br {{.*}}, ^bb3, ^bb4
 # CHECK-NEXT:   ^bb3:
+# CHECK-NEXT:     {{.*}} = llvm.mlir.constant(0.000000e+00 : f32) : f32
 # CHECK-NEXT:     {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:     {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:     %pointer_dim_stride = arith.constant 16 : index
@@ -57,7 +57,7 @@ from exo import DRAM, proc
 # CHECK-NEXT:     %offset_pointer_13 = arith.addi %offset_pointer_12, %offset_pointer_11 : i64
 # CHECK-NEXT:     %offset_pointer_14 = "llvm.inttoptr"(%offset_pointer_13) : (i64) -> !llvm.ptr
 # CHECK-NEXT:     {{.*}} = "llvm.load"(%offset_pointer_14) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
-# CHECK-NEXT:     {{.*}} = arith.mulf {{.*}}, {{.*}} : f32
+# CHECK-NEXT:     {{.*}} = llvm.fmul {{.*}}, {{.*}} : f32
 # CHECK-NEXT:     %pointer_dim_stride_6 = arith.constant 16 : index
 # CHECK-NEXT:     %pointer_dim_offset_3 = arith.muli {{.*}}, %pointer_dim_stride_6 : index
 # CHECK-NEXT:     %pointer_dim_stride_7 = arith.addi %pointer_dim_offset_3, {{.*}} : index
@@ -68,7 +68,7 @@ from exo import DRAM, proc
 # CHECK-NEXT:     %offset_pointer_17 = arith.addi %offset_pointer_16, %offset_pointer_15 : i64
 # CHECK-NEXT:     %offset_pointer_18 = "llvm.inttoptr"(%offset_pointer_17) : (i64) -> !llvm.ptr
 # CHECK-NEXT:     {{.*}} = "llvm.load"(%offset_pointer_18) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
-# CHECK-NEXT:     {{.*}} = arith.addf {{.*}}, {{.*}} : f32
+# CHECK-NEXT:     {{.*}} = llvm.fadd {{.*}}, {{.*}} : f32
 # CHECK-NEXT:     %pointer_dim_stride_8 = arith.constant 16 : index
 # CHECK-NEXT:     %pointer_dim_offset_4 = arith.muli {{.*}}, %pointer_dim_stride_8 : index
 # CHECK-NEXT:     %pointer_dim_stride_9 = arith.addi %pointer_dim_offset_4, {{.*}} : index

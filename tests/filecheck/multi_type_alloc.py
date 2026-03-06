@@ -6,12 +6,12 @@ from exo import *
 
 
 # CHECK:      func.func @multi_type_alloc(%offset_pointer : !llvm.ptr, %offset_pointer_1 : !llvm.ptr) {
-# CHECK:        {{.*}} = arith.constant 4 : i64
+# CHECK:        {{.*}} = llvm.mlir.constant(4) : i64
 # CHECK-NEXT:   %offset_pointer_2 = "llvm.call"({{.*}}) <{callee = @malloc, {{.*}}}> : (i64) -> !llvm.ptr
 # CHECK-NEXT:   %offset_pointer_3 = "llvm.call"({{.*}}) <{callee = @malloc, {{.*}}}> : (i64) -> !llvm.ptr
-# CHECK-NEXT:   {{.*}} = arith.constant 3.140000e+00 : f32
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(3.140000e+00 : f32) : f32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
-# CHECK:        {{.*}} = arith.constant 42 : i32
+# CHECK:        {{.*}} = llvm.mlir.constant(42 : i32) : i32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (i32, !llvm.ptr) -> ()
 # CHECK:        {{.*}} = "llvm.load"({{.*}}) <{ordering = 0 : i64}> : (!llvm.ptr) -> f32
 # CHECK:        "llvm.store"({{.*}}, {{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()

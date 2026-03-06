@@ -8,11 +8,11 @@ from exo import *
 # CHECK:      func.func @if_else({{.*}}) {
 # CHECK:        cf.cond_br {{.*}}, ^bb0, ^bb1
 # CHECK:      ^bb0:
-# CHECK:        arith.constant 1.000000e+00 : f32
+# CHECK:        llvm.mlir.constant(1.000000e+00 : f32) : f32
 # CHECK:        "llvm.store"({{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:        cf.br ^bb2
 # CHECK:      ^bb1:
-# CHECK:        arith.constant 2.000000e+00 : f32
+# CHECK:        llvm.mlir.constant(2.000000e+00 : f32) : f32
 # CHECK:        "llvm.store"({{.*}}) <{ordering = 0 : i64}> : (f32, !llvm.ptr) -> ()
 # CHECK:        cf.br ^bb2
 # CHECK:      ^bb2:

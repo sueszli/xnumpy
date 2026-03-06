@@ -7,9 +7,9 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @read_tensor_indexed(%offset_pointer : !llvm.ptr, %offset_pointer_1 : !llvm.ptr) {
-# CHECK-NEXT:   {{.*}} = arith.constant 0 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 8 : i64
-# CHECK-NEXT:   {{.*}} = arith.constant 1 : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0) : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(8) : i64
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(1) : i64
 # CHECK-NEXT:   cf.br ^bb0({{.*}} : i64)
 # CHECK-NEXT: ^bb0({{.*}} : i64):
 # CHECK-NEXT:   {{.*}} = arith.cmpi slt, {{.*}}, {{.*}} : i64

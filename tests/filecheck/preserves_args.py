@@ -7,7 +7,7 @@ from exo import *
 
 # CHECK: builtin.module {
 # CHECK-NEXT: func.func @preserves_args(%offset_pointer : !llvm.ptr, {{.*}} : i64) {
-# CHECK-NEXT:   {{.*}} = arith.constant 0.000000e+00 : f32
+# CHECK-NEXT:   {{.*}} = llvm.mlir.constant(0.000000e+00 : f32) : f32
 # CHECK-NEXT:   {{.*}} = arith.index_cast {{.*}} : i64 to index
 # CHECK-NEXT:   %bytes_per_element = arith.constant 4 : index
 # CHECK-NEXT:   %scaled_pointer_offset = arith.muli {{.*}}, %bytes_per_element : index
