@@ -1,3 +1,5 @@
-try to emit exclusively llvm stuff in the llvm dialect
+try to emit exclusively emit stuff from the llvm dialect, not arith or anything else
 
-also modify the flags we pass to mlir-opt when commpiling
+then:
+- modify the flags we pass to mlir-opt when commpiling
+- minimize patches_llvmlite.py
