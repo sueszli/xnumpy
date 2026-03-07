@@ -33,26 +33,6 @@ If the loop structure changes (e.g., a different comparison, or the IV isn't at 
 
 **Proposed change:** At minimum, add a docstring explaining what IR shape it expects and when it returns `None`. Ideally, carry the upper bound through metadata or a side table rather than reverse-engineering it from the CFG.
 
-#### 4. `_get_target_ptr` uses `dim_size` closure with `assert ub is not None` (L124-129)
-
-```python
-def dim_size(i: int) -> SSAValue:
-    if shape[i] != DYNAMIC_INDEX:
-        return iconst(shape[i])
-    ub = _loop_ub_as_i64(indices[i])
-    assert ub is not None
-    return ub
-```
-
-The `assert` will fire with no context if `_loop_ub_as_i64` returns `None`. This is a user-invisible crash in the middle of a rewrite pass.
-
-**Proposed change:** Raise a descriptive error:
-
-```python
-if ub is None:
-    raise ValueError(f"cannot determine dynamic dim size for axis {i} of {memref_type}")
-```
-
 ### Severity: Low
 
 #### 5. `RewriteMemRefTypes.recursive = True` is never changed (L254)
