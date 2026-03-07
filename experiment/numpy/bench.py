@@ -103,42 +103,19 @@ def bench(label, fn):
         fn()
         times.append(time.perf_counter() - t0)
     times.sort()
-    med = times[len(times) // 2]
-    gflops = FLOPS / med / 1e9
-    print(f"  {label:20s}  {med * 1e3:8.2f} ms  {gflops:6.2f} GFLOPS")
-    return med
+    return times[len(times) // 2]
 
 
-def main():
-    np.random.seed(42)
-    A = np.random.randn(N, N).astype(np.float32)
-    B = np.random.randn(N, N).astype(np.float32)
-    expected = A @ B
-    A_lists = A.tolist()
-    B_lists = B.tolist()
+np.random.seed(42)
+A = np.random.randn(N, N).astype(np.float32)
+B = np.random.randn(N, N).astype(np.float32)
+expected = A @ B
 
-    print(f"{N}x{N} f32 matmul — warmup={WARMUP}, repeats={REPEATS}\n")
+for k in KERNELS:
+    assert np.allclose(jit_matmul(k, A, B), expected, atol=0.5), f"{k.name()} wrong"
+    bench(k.name(), lambda k=k: jit_matmul(k, A, B))
 
-    results = {}
-    for k in KERNELS:
-        name = k.name()
-        assert np.allclose(jit_matmul(k, A, B), expected, atol=0.5), f"{name} wrong"
-        results[name] = bench(name, lambda k=k: jit_matmul(k, A, B))
-
-    print()
-    t0 = time.perf_counter()
-    C_py = python_matmul(A_lists, B_lists)
-    t_py = time.perf_counter() - t0
-    assert np.allclose(np.array(C_py, dtype=np.float32), expected, atol=0.5)
-    gflops = FLOPS / t_py / 1e9
-    print(f"  {'python (ikj)':20s}  {t_py * 1e3:8.2f} ms  {gflops:6.2f} GFLOPS")
-    results["python (ikj)"] = t_py
-
-    print()
-    baseline = results["v0_naive"]
-    for name, t in results.items():
-        print(f"  {name:20s}  {baseline / t:6.1f}x")
-
-
-if __name__ == "__main__":
-    main()
+t0 = time.perf_counter()
+C_py = python_matmul(A.tolist(), B.tolist())
+t_py = time.perf_counter() - t0
+assert np.allclose(np.array(C_py, dtype=np.float32), expected, atol=0.5)
