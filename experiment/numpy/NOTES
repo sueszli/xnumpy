@@ -1,0 +1,65 @@
+256x256 f32 matmul benchmark — Exo kernels JIT-compiled via xDSL + llvmlite.
+
+all kernels are scalar (one float per instruction). the python baseline
+uses pure list-of-lists with no numpy, so the comparison is fair: both
+sides do the same number of scalar multiply-adds.
+
+kernels:
+
+    v0_naive      ijk triple loop. B accessed column-wise (stride-256),
+                  thrashes cache.
+
+    v1_reorder    fission init from accumulate, then reorder j<->k.
+                  inner loop now sweeps j in both C and B (stride-1).
+
+    v2_k_tile     v1 + divide k by 32. keeps a 32-element slice of A's
+                  row in L1 while sweeping all 256 columns of j.
+
+    v3_unroll     v1 + divide j by 4 + unroll inner j. reduces loop
+                  overhead, exposes 4 independent accumulations for ILP.
+
+    v4_2d_tile    manual 32x32x32 blocked loop nest written directly as
+                  @proc. working set per tile: 3 * 32*32 * 4B = 12 KB.
+
+results (apple silicon):
+
+    v0_naive              53.27 ms    0.63 GFLOPS
+    v1_reorder             6.18 ms    5.43 GFLOPS
+    v2_k_tile              6.05 ms    5.54 GFLOPS
+    v3_unroll              4.75 ms    7.06 GFLOPS
+    v4_2d_tile             9.67 ms    3.47 GFLOPS
+    python (ikj)         524.64 ms    0.06 GFLOPS
+
+    v0_naive               1.0x
+    v1_reorder             8.6x
+    v2_k_tile              8.8x
+    v3_unroll             11.2x
+    v4_2d_tile             5.5x
+    python (ikj)           0.1x
+
+observations:
+
+    cache reordering dominates. ijk->ikj (v0->v1) gives ~9x by fixing
+    B's access pattern from column-major to row-major.
+
+    k-tiling is marginal at this size. 256x256 already partially fits
+    in cache, so explicit k-tiling (v2) barely helps over v1.
+
+    j-unrolling helps ~1.3x. exposing 4 independent accumulations
+    (v3) lets the cpu pipeline them in parallel.
+
+    manual 2d tiling underperforms. the complex index arithmetic
+    (32*io+ii) in v4 generates more instructions and the llvm backend
+    optimizes it less aggressively than the simpler v3 loop nest.
+
+    python is ~10x slower than v0. interpreter overhead per loop
+    iteration completely dominates — same algorithm, same access
+    pattern (ikj), but ~500ms vs ~53ms.
+
+    v3 is ~110x faster than python. the full optimization journey:
+    python interpreter -> native scalar code -> cache-friendly order
+    -> loop unrolling.
+
+usage:
+
+    uv run experiment/numpy/bench.py
