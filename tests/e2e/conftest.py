@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import ctypes
 import fcntl
 import functools
@@ -16,11 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import polars as pl
 from exo import compile_procs as exo_compile_procs
 from exo.API import Procedure
 from exo.core.LoopIR import LoopIR
-from plotnine import aes, coord_flip, element_text, geom_col, ggplot, labs, scale_fill_manual, theme, theme_minimal
 
 from xdsl_exo.main import compile_procs as xdsl_compile_procs
 from xdsl_exo.patches_llvmlite import jit_compile
@@ -29,53 +26,9 @@ from xdsl_exo.patches_llvmlite import jit_compile
 # benchmarking
 #
 
+
 _BENCH_DIR = Path(tempfile.gettempdir()) / "xdsl_exo_bench"
 _BENCH_JSONL = _BENCH_DIR / "timings.jsonl"
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_BENCH_CSV_OUT = _PROJECT_ROOT / "benchmark.csv"
-_BENCH_PDF_OUT = _PROJECT_ROOT / "benchmark.pdf"
-
-
-def pytest_sessionstart(session):
-    if not hasattr(session.config, "workerinput"):  # controller only
-        _BENCH_DIR.mkdir(exist_ok=True)
-        _BENCH_JSONL.unlink(missing_ok=True)
-
-
-def _generate_pdf(csv_path: Path, pdf_path: Path) -> None:
-    df = pl.read_csv(csv_path)
-    df = df.group_by("kernel").agg(
-        pl.col("exo_c").mean(),
-        pl.col("xdsl_mlir").mean(),
-        pl.col("jit").mean(),
-    )
-    long = df.unpivot(index="kernel", on=["exo_c", "xdsl_mlir", "jit"], variable_name="backend", value_name="time_s").sort("kernel")
-
-    pdf = long.to_pandas()
-    colors = {"exo_c": "#4e79a7", "xdsl_mlir": "#f28e2b", "jit": "#e15759"}
-    n_kernels = df.height
-
-    p = ggplot(pdf, aes(x="kernel", y="time_s", fill="backend")) + geom_col(position="dodge") + coord_flip() + scale_fill_manual(values=colors) + labs(x="", y="time (s)", fill="backend", title="kernel benchmark") + theme_minimal() + theme(figure_size=(10, max(6, n_kernels * 0.22))) + theme(axis_text_y=element_text(size=7))
-    p.save(pdf_path, verbose=False)
-
-
-def pytest_sessionfinish(session, exitstatus):
-    if hasattr(session.config, "workerinput"):
-        return  # workers skip
-    if not _BENCH_JSONL.exists():
-        return
-    rows: list[dict] = []
-    for line in _BENCH_JSONL.read_text().splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    if not rows:
-        return
-    rows.sort(key=lambda r: r["kernel"])
-    with open(_BENCH_CSV_OUT, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["kernel", "exo_c", "xdsl_mlir", "jit"])
-        w.writeheader()
-        w.writerows(rows)
-    _generate_pdf(_BENCH_CSV_OUT, _BENCH_PDF_OUT)
 
 
 def _timed(fn, *args, **kw):
@@ -165,10 +118,6 @@ def _call(lib: ctypes.CDLL, proc_ir: Any, kwargs: dict[str, Any], *, has_ctxt: b
     return bufs
 
 
-def _compile_jit(procs: list[Procedure]):
-    return jit_compile(xdsl_compile_procs(procs))
-
-
 def _call_jit(engine, proc_ir: Any, kwargs: dict[str, Any]) -> dict[str, np.ndarray]:
     addr = engine.get_function_address(proc_ir.name)
     argtypes: list = []
@@ -197,21 +146,16 @@ def _call_jit(engine, proc_ir: Any, kwargs: dict[str, Any]) -> dict[str, np.ndar
 def assert_match(proc: Procedure, **kwargs: Any) -> None:
     ir = proc._loopir_proc
 
-    exo_lib, t_exo_compile = _timed(_compile_exo_c, [proc])
-    exo_bufs, t_exo_call = _timed(_call, exo_lib, ir, deepcopy(kwargs), has_ctxt=True)
+    exo_lib = _compile_exo_c([proc])
+    exo_bufs, t_exo = _timed(_call, exo_lib, ir, deepcopy(kwargs), has_ctxt=True)
 
-    xdsl_lib, t_xdsl_compile = _timed(_compile_xdsl_mlir, [proc])
-    xdsl_bufs, t_xdsl_call = _timed(_call, xdsl_lib, ir, deepcopy(kwargs), has_ctxt=False)
+    xdsl_lib = _compile_xdsl_mlir([proc])
+    xdsl_bufs, t_xdsl = _timed(_call, xdsl_lib, ir, deepcopy(kwargs), has_ctxt=False)
 
-    jit_engine, t_jit_compile = _timed(_compile_jit, [proc])
-    jit_bufs, t_jit_call = _timed(_call_jit, jit_engine, ir, deepcopy(kwargs))
+    jit_engine = jit_compile(xdsl_compile_procs([proc]))
+    jit_bufs, t_jit = _timed(_call_jit, jit_engine, ir, deepcopy(kwargs))
 
-    _record_timing(
-        ir.name,
-        t_exo_compile + t_exo_call,
-        t_xdsl_compile + t_xdsl_call,
-        t_jit_compile + t_jit_call,
-    )
+    _record_timing(ir.name, t_exo, t_xdsl, t_jit)
 
     for name in exo_bufs:
         e, x, j = exo_bufs[name], xdsl_bufs[name], jit_bufs[name]

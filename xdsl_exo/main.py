@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import math
 from argparse import ArgumentParser
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-import math
 from functools import cache
 from pathlib import Path
 
@@ -191,9 +191,12 @@ class IRGenerator:
 
         return [from_expr(expr) for expr in tensor.shape()]
 
+    def _zero_index(self) -> list[SSAValue]:
+        return [self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))]
+
     def _memref_load(self, memref_val: SSAValue, idx: list[SSAValue]) -> SSAValue:
         if len(idx) == 0:
-            idx = [self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))]
+            idx = self._zero_index()
         indices = [self._emit(UnrealizedConversionCastOp.get([index], [IndexType()])) for index in idx]
         self.builder.insert(load := memref.LoadOp.get(memref_val, indices))
         return load.res
@@ -202,17 +205,14 @@ class IRGenerator:
         # emit memref.store with i64->index casts, handling scalar memref cases
         if len(idx) == 0:
             assert isinstance(memref_val.type, MemRefType) and memref_val.type.get_shape() == (1,)
-            idx = [self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))]
+            idx = self._zero_index()
 
         index_indices = [self._emit(UnrealizedConversionCastOp.get([index], [IndexType()])) for index in idx]
 
         # if value is a scalar memref, load it first
         if isinstance(value.type, MemRefType):
             assert value.type.get_shape() == (1,)
-            zero_i64 = self._emit(llvm.ConstantOp(IntegerAttr(0, i64), i64))
-            zero_idx = self._emit(UnrealizedConversionCastOp.get([zero_i64], [IndexType()]))
-            self.builder.insert(load := memref.LoadOp.get(value, [zero_idx]))
-            value = load.res
+            value = self._memref_load(value, [])
 
         self.builder.insert(memref.StoreOp.get(value, memref_val, index_indices))
 
