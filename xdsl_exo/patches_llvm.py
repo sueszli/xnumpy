@@ -36,6 +36,7 @@ class FCmpOp(IRDLOperation):
 
 @irdl_op_definition
 class SelectOp(IRDLOperation):
+    # https://github.com/xdslproject/xdsl/pull/5707
     name = "llvm.select"
 
     T: ClassVar = VarConstraint("T", AnyAttr())
