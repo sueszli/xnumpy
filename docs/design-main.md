@@ -1,27 +1,3 @@
-## Issues
-
-### Severity: High
-
-#### 1. `_shape` is a dual-purpose function (L172-192)
-
-```python
-def _shape(self, tensor: T.Tensor, *, emit: bool = False) -> list[int | SSAValue]:
-```
-
-When `emit=False` it returns `int | DYNAMIC_INDEX` (for type declarations). When `emit=True` it returns `int | SSAValue` (for runtime arithmetic). The caller gets a `list[int | SSAValue]` regardless, but the actual contents are type-incompatible. This makes it impossible to reason about the return type statically and forces callers to handle both shapes.
-
-**Proposed change:** Split into two functions:
-
-```python
-def _shape_static(self, tensor: T.Tensor) -> list[int]:
-    """For MemRefType declarations. Variable dims -> DYNAMIC_INDEX."""
-    ...
-
-def _shape_dynamic(self, tensor: T.Tensor) -> list[int | SSAValue]:
-    """For runtime arithmetic. Variable dims -> live SSA values."""
-    ...
-```
-
 #### 2. `_stmt_for` manually saves/restores `symbol_table` (L415-427)
 
 ```python
