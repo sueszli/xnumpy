@@ -1,13 +1,13 @@
 from collections.abc import Callable
 from typing import ClassVar, TypeAlias
 
-from xdsl.dialects import func, llvm, vector
+from xdsl.dialects import llvm, vector
 from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, VectorType, f32, f64, i64
 from xdsl.dialects.llvm import FAbsOp, FNegOp, MaskedStoreOp
 from xdsl.ir import Operation, SSAValue
 from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewrite_pattern
 
-# `vec_*` intrinsic lowering: `func.CallOp` -> LLVM/vector dialect ops
+# `vec_*` intrinsic lowering: `llvm.CallOp` -> LLVM/vector dialect ops
 #
 # Naming:
 # -------
@@ -19,7 +19,7 @@ from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewri
 #
 # Plain variant:
 # --------------
-#     func.call @vec_add_f32x8(%dst, %a, %b)
+#     llvm.call @vec_add_f32x8(%dst, %a, %b)
 #     =>
 #     %v0  = llvm.load %a : vector<8xf32>
 #     %v1  = llvm.load %b : vector<8xf32>
@@ -30,7 +30,7 @@ from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewri
 # ----------------------
 # First arg is a lane-count `n`. A boolean mask selects which lanes get written.
 #
-#     func.call @vec_add_f32x8_pfx(%n, %dst, %a, %b)      e.g. n=3
+#     llvm.call @vec_add_f32x8_pfx(%n, %dst, %a, %b)      e.g. n=3
 #     =>
 #     %idx  = arith.constant   [0, 1, 2, 3, 4, 5, 6, 7]
 #     %bc   = vector.broadcast [3, 3, 3, 3, 3, 3, 3, 3]   (n splatted to all lanes)
@@ -250,8 +250,10 @@ class ConvertVecIntrinsic(RewritePattern):
     _INTRINSICS: ClassVar[dict[str, Handler]] = _make_intrinsics()
 
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: func.CallOp, rewriter: PatternRewriter) -> None:
+    def match_and_rewrite(self, op: llvm.CallOp, rewriter: PatternRewriter) -> None:
+        if op.callee is None:
+            return
         handler = self._INTRINSICS.get(op.callee.root_reference.data)
         if handler is None:
             return
-        rewriter.replace_matched_op(handler(list(op.arguments)))
+        rewriter.replace_matched_op(handler(list(op.args)))

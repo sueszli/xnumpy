@@ -483,7 +483,7 @@ class IRGenerator:
                 assert False
 
     def _procedure(self, procedure: LoopIR.proc) -> None:
-        # lower loopir proc to func.func
+        # lower loopir proc to llvm.func
         if procedure.name in self.seen_proc_names:
             return
         self.seen_proc_names.add(procedure.name)
