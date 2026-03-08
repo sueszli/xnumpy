@@ -3,3 +3,6 @@ i want to write a simple library where people can go `import xnumpy as np` inste
 write report
 
 improve readme
+
+outlook:
+- lazy expression tracing: instead of executing each operation immediately, record a computation graph (like `Add(Mul(a, x), y)`). materialize the result only when needed (indexing, printing, passing to non-xnumpy code). this is what enables fusion. then we can JIT-compile fused expressions.
