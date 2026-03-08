@@ -1,11 +1,11 @@
 # REQUIRES: aarch64
-# RUN: uv run xdsl-exo --asm %s | filecheck %s
+# RUN: uv run xnumpy --asm %s | filecheck %s
 
 from __future__ import annotations
 
 from exo import *
 
-from xdsl_exo.patches_exo import NEON
+from xnumpy.patches_exo import NEON
 
 #
 # f32x4 intrinsic declarations

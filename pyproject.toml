@@ -1,5 +1,5 @@
 [project]
-name = "xdsl-exo"
+name = "xnumpy"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,10 +20,10 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["xdsl_exo*"]
+include = ["xnumpy*"]
 
 [tool.pytest.ini_options]
 addopts = "-n auto --forked -v"
 
 [project.scripts]
-xdsl-exo = "xdsl_exo.main:main"
+xnumpy = "xnumpy.main:main"

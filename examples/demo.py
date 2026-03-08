@@ -6,8 +6,8 @@ import numpy as np
 from exo import *
 from exo.stdlib.scheduling import divide_loop, fission, rename, reorder_loops, simplify, unroll_loop
 
-from xdsl_exo.main import compile_procs
-from xdsl_exo.patches_llvmlite import jit_compile
+from xnumpy.main import compile_procs
+from xnumpy.patches_llvmlite import jit_compile
 
 
 @proc

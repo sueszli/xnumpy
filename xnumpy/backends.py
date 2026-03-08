@@ -17,8 +17,8 @@ from exo import compile_procs as exo_compile_procs
 from exo.API import Procedure
 from exo.core.LoopIR import LoopIR
 
-from xdsl_exo.main import compile_procs as xdsl_compile_procs
-from xdsl_exo.patches_llvmlite import jit_compile
+from xnumpy.main import compile_procs as xdsl_compile_procs
+from xnumpy.patches_llvmlite import jit_compile
 
 
 class Backend(Enum):

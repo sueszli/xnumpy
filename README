@@ -43,9 +43,9 @@ function pointer usable with NumPy arrays through ctypes.
 
 usage:
 
-    $ uv run xdsl-exo examples/demo.py --mlir
-    $ uv run xdsl-exo examples/demo.py --asm
-    $ uv run xdsl-exo examples/demo.py --c
+    $ uv run xnumpy examples/demo.py --mlir
+    $ uv run xnumpy examples/demo.py --asm
+    $ uv run xnumpy examples/demo.py --c
     $ uv run python examples/demo.py
 
 how it works:

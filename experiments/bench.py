@@ -1,8 +1,8 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["xdsl-exo"]
+# dependencies = ["xnumpy"]
 # [tool.uv.sources]
-# xdsl-exo = { path = ".." }
+# xnumpy = { path = ".." }
 # ///
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import numpy as np
 from exo import *
 from exo.stdlib.scheduling import *
 
-from xdsl_exo.main import compile_procs
-from xdsl_exo.patches_exo import NEON
-from xdsl_exo.patches_llvmlite import emit_assembly, jit_compile
+from xnumpy.main import compile_procs
+from xnumpy.patches_exo import NEON
+from xnumpy.patches_llvmlite import emit_assembly, jit_compile
 
 WARMUP = 5
 REPEATS = 50

@@ -1017,7 +1017,7 @@ wheels = [
 ]
 
 [[package]]
-name = "xdsl-exo"
+name = "xnumpy"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

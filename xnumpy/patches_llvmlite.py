@@ -10,7 +10,7 @@ from xdsl.dialects.builtin import ModuleOp
 from xdsl.dialects.llvm import FNegOp
 from xdsl.ir import Block, Operation, SSAValue
 
-from xdsl_exo.patches_llvm import BrOp, CondBrOp, FCmpOp, SelectOp
+from xnumpy.patches_llvm import BrOp, CondBrOp, FCmpOp, SelectOp
 
 ValMap = dict[SSAValue, ir.Value]
 BlockMap = dict[Block, ir.Block]

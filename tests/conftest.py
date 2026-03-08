@@ -14,7 +14,7 @@ import polars as pl
 from exo.API import Procedure
 from plotnine import aes, coord_flip, element_text, geom_col, ggplot, labs, scale_fill_manual, theme, theme_minimal
 
-from xdsl_exo.backends import Backend, compile_and_load
+from xnumpy.backends import Backend, compile_and_load
 
 # xDSL IRDL holds raw ctypes pointers. GC finalizer ordering -> dangling ptr -> segfault
 _gc.disable()

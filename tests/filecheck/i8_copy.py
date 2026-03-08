@@ -1,4 +1,4 @@
-# RUN: uv run xdsl-exo --mlir -o - %s | filecheck %s
+# RUN: uv run xnumpy --mlir -o - %s | filecheck %s
 
 from __future__ import annotations
 

@@ -1,2 +1,7 @@
 rename project to xnumpy
-improve readme, report
+
+write an api that mimics numpy, try to outperform it
+
+improve readme
+
+write report

@@ -31,9 +31,9 @@ from xdsl.transforms.common_subexpression_elimination import CommonSubexpression
 from xdsl.transforms.reconcile_unrealized_casts import ReconcileUnrealizedCastsPass
 from xdsl.utils.scoped_dict import ScopedDict
 
-from xdsl_exo.patches_intrinsics import ConvertVecIntrinsic
-from xdsl_exo.patches_llvm import BrOp, CondBrOp, ExtendedConvertMemRefToPtr, FCmpOp, RewriteMemRefTypes, SelectOp
-from xdsl_exo.patches_llvmlite import emit_assembly
+from xnumpy.patches_intrinsics import ConvertVecIntrinsic
+from xnumpy.patches_llvm import BrOp, CondBrOp, ExtendedConvertMemRefToPtr, FCmpOp, RewriteMemRefTypes, SelectOp
+from xnumpy.patches_llvmlite import emit_assembly
 
 
 def _is_mutated(name: str, body: list) -> bool:

@@ -1,4 +1,4 @@
-# RUN: uv run xdsl-exo --mlir -o - %s | filecheck %s
+# RUN: uv run xnumpy --mlir -o - %s | filecheck %s
 
 # CHECK: builtin.module {
 # CHECK-NEXT: llvm.func @bool_ops({{.*}} : !llvm.ptr, {{.*}} : i64, {{.*}} : i64, {{.*}} : i64) {
