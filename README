@@ -41,7 +41,7 @@ The programmer writes a kernel, applies scheduling transforms
 (e.g. tiling, vectorization, unrolling), and gets a callable
 function pointer usable with NumPy arrays through ctypes.
 
-usage:
+writing your own kernels:
 
     $ uv run xnumpy examples/demo.py --mlir
     $ uv run xnumpy examples/demo.py --asm
