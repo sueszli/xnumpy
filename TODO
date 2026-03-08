@@ -1,5 +1,5 @@
-write an api that mimics numpy (we later try to outperform it)
-
-improve readme
+i want to write a simple library where people can go `import xnumpy as np` instead of `import numpy as np` and have a plug and play replacement thats way faster.
 
 write report
+
+improve readme
