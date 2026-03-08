@@ -1,24 +1,17 @@
-minimize ffi latency
-
-A few approaches, from simple to ambitious. try them all out!
-
-  1. Kernel fusion — Instead of a + b then * c as two FFI calls, fuse them into a single kernel a + b * c. One crossing instead of two. Exo can do this at the scheduling level.        
-  2. Faster calling convention — ctypes has relatively high call overhead (~0.5μs). A CPython C extension or cffi would be cheaper. Pybind11/nanobind even cheaper.                   
-  3. Reduce marshaling — _call_jit re-extracts .ctypes.data pointers every call. If your array wrapper cached the raw pointer, you'd skip that work on repeated calls.                  
-  4. Graph-level compilation — Instead of executing eagerly op-by-op, trace a sequence of operations and compile the whole graph into one native function. One FFI call for an entire   
-  expression like (a + b) * c - d. This is what JAX's jit and PyTorch's compile do.
-
-  For this project, kernel fusion (1) is probably the most natural fit since Exo already has the scheduling machinery to compose operations.
-
-
 drop unnecessary kernels like add/sub etc. -> focus on matmul and more complex ones
 
+---
 
-write report
+IMPORTANT: do NOT use repeat wrappers (looping inside native code to amortize FFI cost).
+this is an unfair trick — numpy can't do it, so it's not an apples-to-apples comparison.
+every xnumpy op must pay the same per-call FFI overhead that numpy pays.
 
-improve readme
+minimize ffi latency
 
+- Faster calling convention — ctypes has relatively high call overhead (~0.5μs). A CPython C extension or cffi would be cheaper. Pybind11/nanobind even cheaper.                   
+- Reduce marshaling — _call_jit re-extracts .ctypes.data pointers every call. If your array wrapper cached the raw pointer, you'd skip that work on repeated calls.                  
 
+---
 
 # benchmarking game
 
