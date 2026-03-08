@@ -8,6 +8,10 @@ from exo.stdlib.scheduling import divide_loop, replace, simplify
 from xnumpy.backends import compile_jit
 from xnumpy.library.kernels.neon import neon_vadd_f32x4, neon_vmul_f32x4, neon_vneg_f32x4, neon_vsub_f32x4
 
+#
+# vector-vector ops  (out = a op b)
+#
+
 
 @proc
 def _add(N: size, out: f32[N] @ DRAM, a: f32[N] @ DRAM, b: f32[N] @ DRAM):
@@ -33,6 +37,11 @@ def _neg(N: size, out: f32[N] @ DRAM, a: f32[N] @ DRAM):
         out[i] = -a[i]
 
 
+#
+# scalar broadcast ops  (out = a op scalar)
+#
+
+
 @proc
 def _sadd(N: size, out: f32[N] @ DRAM, a: f32[N] @ DRAM, s: f32[1] @ DRAM):
     for i in seq(0, N):
@@ -53,8 +62,14 @@ def _smul(N: size, out: f32[N] @ DRAM, a: f32[N] @ DRAM, s: f32[1] @ DRAM):
 
 @proc
 def _srsub(N: size, out: f32[N] @ DRAM, a: f32[N] @ DRAM, s: f32[1] @ DRAM):
+    # reverse subtract: out = scalar - a  (for rsub where scalar is the lhs)
     for i in seq(0, N):
         out[i] = s[0] - a[i]
+
+
+#
+# in-place vector-vector ops  (a op= b)
+#
 
 
 @proc
@@ -75,6 +90,11 @@ def _imul(N: size, a: f32[N] @ DRAM, b: f32[N] @ DRAM):
         a[i] = a[i] * b[i]
 
 
+#
+# in-place scalar broadcast ops  (a op= scalar)
+#
+
+
 @proc
 def _isadd(N: size, a: f32[N] @ DRAM, s: f32[1] @ DRAM):
     for i in seq(0, N):
@@ -93,15 +113,27 @@ def _ismul(N: size, a: f32[N] @ DRAM, s: f32[1] @ DRAM):
         a[i] = a[i] * s[0]
 
 
+#
+# reduction
+#
+
+
 @proc
 def _sum(N: size, out: f32[1] @ DRAM, a: f32[N] @ DRAM):
+    # out[0] = sum(a)  (sequential accumulation, no vectorized reduction yet)
     out[0] = 0.0
     for i in seq(0, N):
         out[0] += a[i]
 
 
+#
+# scheduling
+#
+
+
 def _schedule_vec(intrinsic):
     def transform(p):
+        # tile loop by 4 and replace inner body with NEON intrinsic
         p = divide_loop(p, "i", 4, ["io", "ii"], perfect=True)
         p = replace(p, "for ii in _: _", intrinsic)
         p = simplify(p)
@@ -111,6 +143,7 @@ def _schedule_vec(intrinsic):
 
 
 def _make(generic, prefix, vec=None):
+    # factory: partial-eval N, optionally apply NEON schedule if n divisible by 4
     def kernel(n):
         return compile_jit(
             generic.partial_eval(N=n),
@@ -120,6 +153,10 @@ def _make(generic, prefix, vec=None):
 
     return kernel
 
+
+#
+# public api
+#
 
 add = _make(_add, "add", neon_vadd_f32x4)
 sub = _make(_sub, "sub", neon_vsub_f32x4)

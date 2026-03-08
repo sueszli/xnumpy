@@ -14,5 +14,9 @@ fmt:
 	uvx black --line-length 5000 .
 	uvx ruff check --fix --ignore F403,F405,F821,E731 .
 
+.PHONY: benchmark
+benchmark:
+	uv run python benchmarks/run.py
+
 .PHONY: precommit
-precommit: fmt tests
+precommit: fmt tests benchmark
