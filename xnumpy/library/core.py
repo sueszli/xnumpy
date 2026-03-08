@@ -5,12 +5,9 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from xnumpy.library.kernels.elementwise import add, iadd, imul, iscalar_add, iscalar_mul, iscalar_sub, isub, mul, neg, scalar_add, scalar_mul, scalar_rsub, scalar_sub, sub, sum_reduce
 from xnumpy.library.kernels.matmul import matmul
 
 float32 = np.float32
-
-_scalar = lambda v: np.array([np.float32(v)])
 
 
 class ndarray:
@@ -41,34 +38,16 @@ class ndarray:
         return ndarray(self._data.copy())
 
     def __add__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        out = empty(self.shape)
-        if isinstance(other, ndarray):
-            add(n)(out._data.ctypes.data, self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            scalar_add(n)(out._data.ctypes.data, self._data.ctypes.data, s.ctypes.data)
-        return out
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        return ndarray(self._data + b)
 
     def __sub__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        out = empty(self.shape)
-        if isinstance(other, ndarray):
-            sub(n)(out._data.ctypes.data, self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            scalar_sub(n)(out._data.ctypes.data, self._data.ctypes.data, s.ctypes.data)
-        return out
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        return ndarray(self._data - b)
 
     def __mul__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        out = empty(self.shape)
-        if isinstance(other, ndarray):
-            mul(n)(out._data.ctypes.data, self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            scalar_mul(n)(out._data.ctypes.data, self._data.ctypes.data, s.ctypes.data)
-        return out
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        return ndarray(self._data * b)
 
     def __radd__(self, other: float | int) -> ndarray:
         return self.__add__(other)
@@ -77,43 +56,25 @@ class ndarray:
         return self.__mul__(other)
 
     def __rsub__(self, other: float | int) -> ndarray:
-        n = self.size
-        out = empty(self.shape)
-        s = _scalar(other)
-        scalar_rsub(n)(out._data.ctypes.data, self._data.ctypes.data, s.ctypes.data)
-        return out
+        return ndarray(np.float32(other) - self._data)
 
     def __iadd__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        if isinstance(other, ndarray):
-            iadd(n)(self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            iscalar_add(n)(self._data.ctypes.data, s.ctypes.data)
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        self._data += b
         return self
 
     def __isub__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        if isinstance(other, ndarray):
-            isub(n)(self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            iscalar_sub(n)(self._data.ctypes.data, s.ctypes.data)
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        self._data -= b
         return self
 
     def __imul__(self, other: ndarray | float | int) -> ndarray:
-        n = self.size
-        if isinstance(other, ndarray):
-            imul(n)(self._data.ctypes.data, other._data.ctypes.data)
-        else:
-            s = _scalar(other)
-            iscalar_mul(n)(self._data.ctypes.data, s.ctypes.data)
+        b = other._data if isinstance(other, ndarray) else np.float32(other)
+        self._data *= b
         return self
 
     def __neg__(self) -> ndarray:
-        out = empty(self.shape)
-        neg(self.size)(out._data.ctypes.data, self._data.ctypes.data)
-        return out
+        return ndarray(-self._data)
 
     def __matmul__(self, other: ndarray) -> ndarray:
         assert isinstance(other, ndarray) and self.ndim == 2 and other.ndim == 2
@@ -125,9 +86,7 @@ class ndarray:
         return out
 
     def sum(self) -> float:
-        out = np.zeros(1, dtype=np.float32)
-        sum_reduce(self.size)(out.ctypes.data, self._data.ctypes.data)
-        return float(out[0])
+        return float(self._data.sum())
 
     def __getitem__(self, key: Any) -> Any:
         raise NotImplementedError("xnumpy.ndarray.__getitem__")

@@ -1,4 +1,10 @@
+---
+
 drop unnecessary kernels like add/sub etc. -> focus on matmul and more complex ones
+
+---
+
+consider moving compile_jit, _call_jit to patches_llvmlite and providing a simpler abstraction for backend.py that is similar to the other ones
 
 ---
 
