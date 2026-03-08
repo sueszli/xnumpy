@@ -62,7 +62,7 @@ Write your own kernels:
     $ uv run xnumpy examples/demo.py --c
     $ uv run python examples/demo.py
 
-Use optimized kernels:
+Use as library:
 
     ... work in progress
 
