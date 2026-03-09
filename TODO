@@ -1,3 +1,8 @@
+NOTE: xnumpy already has a legitimate advantage from kernel fusion — numpy's
+y += a * x requires 2 FFI crossings (multiply ufunc + add ufunc + temp alloc),
+while xnumpy's fused saxpy kernel requires 1. That's a real algorithmic win,
+not a benchmarking trick.
+
 # benchmarking game
 
 the experiments/ SAXPY benchmark hits 13.4x over numpy because it uses NEON intrinsics,
@@ -34,19 +39,6 @@ should call the _repeat variant to amortize ctypes overhead, same as experiments
 this won't help the library API (each __add__ is still one call), but it will show the
 true kernel speed in benchmarks/results.csv. expect elementwise speedups to jump from
 ~0.1x to ~0.5-1x at large n.
-
-----
-
-CONSTRAINT: No repeat wrappers (looping inside native code to amortize FFI cost).
-Every xnumpy op must pay the same per-call FFI overhead that numpy pays.
-
-NOTE: xnumpy already has a legitimate advantage from kernel fusion — numpy's
-y += a * x requires 2 FFI crossings (multiply ufunc + add ufunc + temp alloc),
-while xnumpy's fused saxpy kernel requires 1. That's a real algorithmic win,
-not a benchmarking trick. The constraint above is about not artificially
-amortizing FFI cost via native-code looping, which numpy cannot do.
-
----
 
 ### move 2: NEON vectorization for elementwise
 apply Exo scheduling to the elementwise kernels: divide the loop by 4, replace the inner

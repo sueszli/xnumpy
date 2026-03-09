@@ -752,6 +752,8 @@ def to_asm(module: ModuleOp) -> str:
 
 @cache
 def _extract_jit_funcs(module: ModuleOp, engine: llvmlite.binding.ExecutionEngine) -> dict[str, object]:
+    # call our custom c bridge to minimize ffi overhead
+    # constraint: no native-code loop wrappers. each op pays the same per-call FFI cost as numpy for fair comparison
     fns: dict[str, object] = {}
     for op in module.ops:
         if not isinstance(op, llvm.FuncOp) or not op.body.blocks:
