@@ -126,6 +126,6 @@ def _jit_core(n: int) -> Callable[..., None]:
 
 @cache
 def softmax(n: int) -> tuple[Callable[..., None], Callable[..., None]]:
-    """Returns (find_max_fn, softmax_core_fn) pair."""
+    # returns (find_max_fn, softmax_core_fn) pair
     max_fn = _jit_max_neon(n) if n % 4 == 0 else _jit_max(n)
     return max_fn, _jit_core(n)
