@@ -114,12 +114,3 @@ Ideas (ranked by impact)
      fn = ctypes.CFUNCTYPE(None, c_void_p, c_void_p, c_void_p, c_int64)(addr)
 
    Avoids ctypes' runtime type coercion. Arg types are known from proc_ir.args.
-
-
-6. Cache compile_jit result (not just the engine)
-   Savings: avoids redundant work on repeated compile_jit calls | Effort: Low
-
-   _extract_jit_funcs is called every time compile_jit is called, even on
-   cached engines. It iterates module.ops and rebuilds the dict. The @cache
-   on _to_jit_engine caches the engine, but function pointer extraction +
-   CFUNCTYPE wrapping happens every time. Cache the full compile_jit result.

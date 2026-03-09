@@ -750,6 +750,7 @@ def to_asm(module: ModuleOp) -> str:
     return tm.emit_assembly(mod_ref)
 
 
+@cache
 def _extract_jit_funcs(module: ModuleOp, engine: llvmlite.binding.ExecutionEngine) -> dict[str, ctypes._CFuncPtr]:
     fns: dict[str, ctypes._CFuncPtr] = {}
     for op in module.ops:
