@@ -697,7 +697,6 @@ class LLVMLiteGenerator:
                 LLVMLiteGenerator._convert_op(op, builder, block_map, phi_map, val_map)
 
     @staticmethod
-    @cache
     def generate(module: ModuleOp) -> llvmlite.ir.Module:
         llvm_module = llvmlite.ir.Module()
         # enable loop vectorizer
@@ -735,7 +734,6 @@ def _target_machine() -> llvmlite.binding.TargetMachine:
     return target.create_target_machine(cpu=cpu, features=features, opt=3)
 
 
-@cache
 def _to_llvmlite_moduleref(llvmlite_module: llvmlite.ir.Module) -> tuple[llvmlite.binding.ModuleRef, llvmlite.binding.TargetMachine]:
     # llvmlite IR -> parsed + optimized LLVM module ref
     mod_ref = llvmlite.binding.parse_assembly(str(llvmlite_module))
