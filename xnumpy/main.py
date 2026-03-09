@@ -817,6 +817,7 @@ class Backend(Enum):
 
 def compile(proc: Procedure, backend: Backend) -> Callable[..., dict[str, np.ndarray]]:
     # compile a procedure -> callable(**kwargs) -> {buffer_name: np.ndarray}
+    # note: used to e2e sanity check all backends
     match backend:
         case Backend.EXO_C:
             return compile_exo(proc)
