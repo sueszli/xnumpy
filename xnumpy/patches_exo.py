@@ -15,10 +15,7 @@ class NEON(Memory):
         if not shape:
             raise MemGenError(f"{srcinfo}: NEON vectors are not scalar values")
 
-        vec_types: dict[str, tuple[int, str]] = {
-            "float": (4, "float32x4_t"),
-            "double": (2, "float64x2_t"),
-        }
+        vec_types: dict[str, tuple[int, str]] = {"float": (4, "float32x4_t"), "double": (2, "float64x2_t")}
 
         if prim_type not in vec_types:
             raise MemGenError(f"{srcinfo}: NEON vectors must be f32/f64, got {prim_type}")

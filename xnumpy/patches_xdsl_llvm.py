@@ -1,11 +1,11 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 from xdsl.context import Context
 from xdsl.dialects import builtin, llvm, memref
 from xdsl.dialects.builtin import DYNAMIC_INDEX, I1, AnyFloatConstr, IntegerAttr, IntegerType, MemRefType, StringAttr, UnrealizedConversionCastOp, i1, i64
-from xdsl.dialects.llvm import LLVMPointerType
+from xdsl.dialects.llvm import GEP_USE_SSA_VAL, LLVMPointerType
 from xdsl.ir import Block, BlockArgument, Operation, OpResult, SSAValue
 from xdsl.irdl import AnyAttr, AttrSizedOperandSegments, IRDLOperation, VarConstraint, irdl_op_definition, operand_def, prop_def, result_def, successor_def, traits_def, var_operand_def
 from xdsl.passes import ModulePass
@@ -141,16 +141,7 @@ def _iconst(ins, n: int) -> SSAValue:
     return ins(llvm.ConstantOp(IntegerAttr(n, i64), i64)).result
 
 
-def _offset_ptr(
-    base: SSAValue,
-    indices: Sequence[SSAValue],
-    rank: int,
-    dim_size_fn,
-    elem_size: int,
-    ins,
-) -> SSAValue:
-    # flat_byte_offset = sum(index_i * stride_i) * elem_size, then base_ptr + flat_byte_offset
-
+def _flat_offset(indices: Sequence[SSAValue], rank: int, dim_size_fn, ins) -> SSAValue | None:
     # row-major strides: stride[last]=1, stride[i]=stride[i+1]*dim[i+1]
     strides: list[SSAValue] = [_iconst(ins, 1)] * rank
     for i in range(rank - 2, -1, -1):
@@ -161,23 +152,32 @@ def _offset_ptr(
     for idx, stride in zip(indices, strides):
         term = ins(llvm.MulOp(_unwrap_i64(idx), stride)).res
         flat = term if flat is None else ins(llvm.AddOp(flat, term)).res
+    return flat
 
+
+def _offset_ptr_gep(base: SSAValue, indices: Sequence[SSAValue], rank: int, dim_size_fn, elem_type, ins) -> SSAValue:
+    # compute &base[indices] using GEP with element type (for scalar load/store, enables LLVM vectorization)
+    flat = _flat_offset(indices, rank, dim_size_fn, ins)
     # cast base memref -> llvm.ptr, then add byte offset via ptr-to-int round-trip
     base_ptr = ins(UnrealizedConversionCastOp.get([base], [LLVMPointerType()])).results[0]
     if flat is None:
         return base_ptr
+    return ins(llvm.GEPOp(base_ptr, [GEP_USE_SSA_VAL], elem_type, ssa_indices=[flat], inbounds=True)).result
 
+
+def _offset_ptr_raw(base: SSAValue, indices: Sequence[SSAValue], rank: int, dim_size_fn, elem_size: int, ins) -> SSAValue:
+    # compute &base[indices] using ptrtoint/inttoptr (for subview. produces type-agnostic ptr)
+    flat = _flat_offset(indices, rank, dim_size_fn, ins)
+    base_ptr = ins(UnrealizedConversionCastOp.get([base], [LLVMPointerType()])).results[0]
+    if flat is None:
+        return base_ptr
     byte_offset = ins(llvm.MulOp(flat, _iconst(ins, elem_size))).res
     ptr_int = ins(llvm.PtrToIntOp(base_ptr)).output
     target_int = ins(llvm.AddOp(ptr_int, byte_offset)).res
     return ins(llvm.IntToPtrOp(target_int)).output
 
 
-def _get_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indices: list[SSAValue], rewriter: PatternRewriter) -> SSAValue:
-    # compute &memref_val[indices] as an llvm.ptr; uses static shape when available, falls back to loop bound for dynamic dims
-    shape = memref_type.get_shape()
-    ins = rewriter.insert_op
-
+def _dim_size_fn(shape: tuple[int, ...], indices: Sequence[SSAValue], ins: Callable) -> Callable[[int], SSAValue]:
     def dim_size(i: int) -> SSAValue:
         if shape[i] != DYNAMIC_INDEX:
             return _iconst(ins, shape[i])
@@ -185,7 +185,14 @@ def _get_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indic
         assert ub is not None
         return ub
 
-    return _offset_ptr(memref_val, indices, len(shape), dim_size, memref_type.element_type.size, ins)
+    return dim_size
+
+
+def _get_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indices: list[SSAValue], rewriter: PatternRewriter) -> SSAValue:
+    # compute &memref_val[indices] using GEP (enables LLVM auto-vectorization for scalar load/store)
+    shape = memref_type.get_shape()
+    ins = rewriter.insert_op
+    return _offset_ptr_gep(memref_val, indices, len(shape), _dim_size_fn(shape, indices, ins), memref_type.element_type, ins)
 
 
 @dataclass
@@ -238,7 +245,7 @@ class ConvertSubviewPattern(RewritePattern):
             else:
                 all_offsets.append(_iconst(ins, soff))
 
-        result_ptr = _offset_ptr(op.source, all_offsets, len(src_shape), lambda i: _iconst(ins, src_shape[i]), src_type.element_type.size, ins)
+        result_ptr = _offset_ptr_raw(op.source, all_offsets, len(src_shape), lambda i: _iconst(ins, src_shape[i]), src_type.element_type.size, ins)
 
         # wrap result as MemRefType so downstream load/store patterns still see the right shape for stride computation
         rewriter.replace_op(op, UnrealizedConversionCastOp.get([result_ptr], [op.result.type]))

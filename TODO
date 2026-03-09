@@ -1,3 +1,12 @@
+optimize this as is
+
+
+consider using numba for jit compiling other parts of my code
+
+
+move kernels into benchmarks
+
+
 NOTE: xnumpy already has a legitimate advantage from kernel fusion — numpy's
 y += a * x requires 2 FFI crossings (multiply ufunc + add ufunc + temp alloc),
 while xnumpy's fused saxpy kernel requires 1. That's a real algorithmic win,
@@ -78,7 +87,3 @@ but should narrow the gap from 0.01x to maybe 0.1-0.3x.
 the 13.4x SAXPY number from the paper came from fusing mul+add into FMA and using
 repeat wrappers. matching that in the library requires both fused kernels (move 4)
 and vectorization (move 2).
-
----
-
-consider using numba for jit compiling other parts of my code

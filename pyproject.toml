@@ -25,6 +25,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["xnumpy*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 addopts = "-n auto --forked -v"

@@ -217,6 +217,16 @@ def _build_neon_unop(op_cls: type, dst: SSAValue, src: SSAValue, *, vec_type: Ve
     return (load, result, llvm.StoreOp(result.res, dst))
 
 
+def _build_neon_zero(dst: SSAValue, *, vec_type: VectorType) -> tuple[Operation, ...]:
+    # dst[:] = [0.0] * n_lanes  (scalar zero + broadcast to avoid vector ConstantOp)
+    from xdsl.dialects.builtin import FloatAttr
+
+    elem_type = vec_type.element_type
+    zero = llvm.ConstantOp(FloatAttr(0.0, elem_type), elem_type)
+    broadcast = vector.BroadcastOp(zero.result, vec_type)
+    return (zero, broadcast, llvm.StoreOp(broadcast.vector, dst))
+
+
 def _make_intrinsics() -> dict[str, Handler]:
     entries: dict[str, Handler] = {}
 
@@ -255,6 +265,7 @@ def _make_intrinsics() -> dict[str, Handler]:
     entries["neon_loadu_f32x4"] = lambda args: _build_neon_storeu(*args, vec_type=_F32X4)
     entries["neon_fmadd_f32x4"] = lambda args: _build_neon_fmadd(*args, vec_type=_F32X4)
     entries["neon_broadcast_f32x4"] = lambda args: _build_neon_broadcast(*args, vec_type=_F32X4)
+    entries["neon_zero_f32x4"] = lambda args: _build_neon_zero(args[0], vec_type=_F32X4)
     entries["neon_add_f32x4"] = lambda args: _build_neon_binop(llvm.FAddOp, *args, vec_type=_F32X4)
     entries["neon_mul_f32x4"] = lambda args: _build_neon_binop(llvm.FMulOp, *args, vec_type=_F32X4)
     entries["neon_sub_f32x4"] = lambda args: _build_neon_binop(llvm.FSubOp, *args, vec_type=_F32X4)

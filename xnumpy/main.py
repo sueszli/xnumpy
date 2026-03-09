@@ -24,7 +24,7 @@ from xdsl.backend.llvm.convert_type import convert_type
 from xdsl.builder import Builder
 from xdsl.context import Context
 from xdsl.dialects import llvm, memref, vector
-from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
+from xdsl.dialects.builtin import BoolAttr, Builtin, DenseIntOrFPElementsAttr, FloatAttr, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
 from xdsl.dialects.llvm import FNegOp
 from xdsl.dialects.utils import get_dynamic_index_list, split_dynamic_index_list
 from xdsl.ir import Attribute, Block, Operation, OpResult, Region, SSAValue
@@ -220,7 +220,7 @@ class IRGenerator:
         mlir_type = self._to_mlir_type(usub.type)
 
         if mlir_type in [f16, f32, f64]:
-            return self._emit(FNegOp(expr))
+            return self._emit(FNegOp(expr, fast_math=llvm.FastMathAttr("fast")))
         elif mlir_type in [i8, i16, i32, i64]:
             zero = self._emit(llvm.ConstantOp(IntegerAttr(0, mlir_type), mlir_type))
             return self._emit(llvm.SubOp(zero, expr))
@@ -251,7 +251,7 @@ class IRGenerator:
         float_ops = {"+": llvm.FAddOp, "-": llvm.FSubOp, "*": llvm.FMulOp, "/": llvm.FDivOp}
         int_ops = {"+": llvm.AddOp, "-": llvm.SubOp, "*": llvm.MulOp, "/": llvm.SDivOp, "%": llvm.SRemOp}
         if mlir_type in [f16, f32, f64]:
-            return self._emit(float_ops[binop.op](lhs, rhs))
+            return self._emit(float_ops[binop.op](lhs, rhs, fast_math=llvm.FastMathAttr("fast")))
         if mlir_type in [i8, i16, i32, i64]:
             return self._emit(int_ops[binop.op](lhs, rhs))
         assert False
@@ -332,7 +332,7 @@ class IRGenerator:
 
         current = self._memref_load(memref_val, idx)
         if value.type in [f16, f32, f64]:
-            result = self._emit(llvm.FAddOp(current, value))
+            result = self._emit(llvm.FAddOp(current, value, fast_math=llvm.FastMathAttr("fast")))
         else:
             result = self._emit(llvm.AddOp(current, value))
         self._memref_store(result, memref_val, idx)
@@ -636,7 +636,10 @@ class LLVMLiteGenerator:
         # translate one xdsl op to llvmlite ir. unmatched ops fall back to xdsl's convert_op
         match op:
             case llvm.ConstantOp():
-                val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), op.value.value.data)
+                if isinstance(op.value, DenseIntOrFPElementsAttr):
+                    val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), list(op.value.iter_values()))
+                else:
+                    val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), op.value.value.data)
             case FNegOp():
                 val_map[op.res] = builder.fneg(val_map[op.arg])
             case FCmpOp():
@@ -695,12 +698,21 @@ class LLVMLiteGenerator:
     @cache
     def generate(module: ModuleOp) -> llvmlite.ir.Module:
         llvm_module = llvmlite.ir.Module()
+        # enable loop vectorizer
+        tm = _target_machine()
+        llvm_module.triple = tm.triple
+        llvm_module.data_layout = str(tm.target_data)
         func_ops = list(module.ops)
 
         for op in func_ops:
             assert isinstance(op, llvm.FuncOp)
             ftype = llvmlite.ir.FunctionType(convert_type(op.function_type.output), [convert_type(t) for t in op.function_type.inputs])
-            llvmlite.ir.Function(llvm_module, ftype, name=op.sym_name.data)
+            fn = llvmlite.ir.Function(llvm_module, ftype, name=op.sym_name.data)
+
+            # mark all pointer args as noalias for vectorization
+            for arg in fn.args:
+                if isinstance(arg.type, llvmlite.ir.PointerType):
+                    arg.add_attribute("noalias")
 
         for op in func_ops:
             if op.body.blocks:
@@ -718,7 +730,7 @@ def _target_machine() -> llvmlite.binding.TargetMachine:
     target = llvmlite.binding.Target.from_default_triple()
     cpu = llvmlite.binding.get_host_cpu_name()
     features = llvmlite.binding.get_host_cpu_features().flatten()
-    return target.create_target_machine(cpu=cpu, features=features, opt=2)
+    return target.create_target_machine(cpu=cpu, features=features, opt=3)
 
 
 @cache
@@ -727,7 +739,9 @@ def _to_llvmlite_moduleref(llvmlite_module: llvmlite.ir.Module) -> tuple[llvmlit
     mod_ref = llvmlite.binding.parse_assembly(str(llvmlite_module))
     tm = _target_machine()
     pto = llvmlite.binding.PipelineTuningOptions()
-    pto.speed_level = 2  # O2 optimization
+    pto.speed_level = 3  # O3 optimization
+    pto.loop_vectorization = True  # enable loop vectorizer
+    pto.slp_vectorization = True  # enable SLP vectorizer (straight-line code)
     pb = llvmlite.binding.create_pass_builder(tm, pto)
     pb.getModulePassManager().run(mod_ref, pb)
     return mod_ref, tm
