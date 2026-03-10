@@ -1,0 +1,10 @@
+entire project could consist of just 1 file (and 2 patch files) bridging exo with llvmlite:
+
+- experiments show custom vectorization is pointless -> snapshot entire project in archive/, drop intrinsics stuff, simplify code further
+- jitcall influence is minimal (max 1 additional GFlop per kernel) -> drop jitcall and simplify even further
+
+next steps:
+
+- write individual kernels for microgpt
+- write a single massive fused kernel for microgpt
+- benchmark e2e against default python version, numpy version

@@ -2,6 +2,7 @@
 # - https://karpathy.github.io/2026/02/12/microgpt/
 # - https://gist.githubusercontent.com/karpathy/8627fe009c40f57531cb18360106ce95/raw/14fb038816c7aae0bb9342c2dbf1a51dd134a5ff/microgpt.py
 
+
 from __future__ import annotations
 
 import sys
@@ -9,7 +10,9 @@ import timeit
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import polars as pl
+from plotnine import aes, element_line, element_rect, element_text, expand_limits, facet_wrap, geom_hline, geom_line, geom_point, ggplot, labs, scale_color_manual, scale_linetype_manual, scale_shape_manual, theme, theme_minimal
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -584,23 +587,9 @@ for t_size, d_size in tqdm(ws_sizes, desc="weighted_sum"):
     )
 
 
-if __name__ == "__main__":
-    import pandas as pd
-    from plotnine import aes, element_line, element_rect, element_text, expand_limits, facet_wrap, geom_hline, geom_line, geom_point, ggplot, labs, scale_color_manual, scale_linetype_manual, scale_shape_manual, theme, theme_minimal
-
-    df = pl.DataFrame(rows)
-    df = df.with_columns(
-        (pl.col("exo_gflops") / pl.col("numpy_gflops")).round(2).alias("exo_speedup"),
-        (pl.col("neon_gflops") / pl.col("numpy_gflops")).round(2).alias("neon_speedup"),
-    )
-    with pl.Config(tbl_rows=-1):
-        print(df)
-    df.write_csv(Path(__file__).parent / "results.csv")
-
-    # fmt: off
+def _plot(df: pl.DataFrame) -> None:
     pdf = df.unpivot(on=["exo_speedup", "neon_speedup"], index=["kernel", "n"], variable_name="variant", value_name="speedup").with_columns(pl.col("variant").replace({"exo_speedup": "Auto-vectorized", "neon_speedup": "NEON intrinsics"}), pl.col("speedup").clip(lower_bound=1.0)).to_pandas()
 
-    # ordered categorical x-axis: evenly spaced, no log scale needed
     seen = []
     for v in pdf["n"]:
         if v not in seen:
@@ -609,6 +598,7 @@ if __name__ == "__main__":
 
     out = Path(__file__).parent / "plots"
     out.mkdir(exist_ok=True)
+    # fmt: off
     p = (
         ggplot(pdf, aes("n", "speedup", color="variant", linetype="variant", group="variant"))
         + geom_hline(yintercept=1, linetype="solid", color="#bbbbbb", size=0.8)
@@ -644,3 +634,15 @@ if __name__ == "__main__":
     )
     p.save(str(out / "convergence.pdf"))
     # fmt: on
+
+
+if __name__ == "__main__":
+    df = pl.DataFrame(rows)
+    df = df.with_columns(
+        (pl.col("exo_gflops") / pl.col("numpy_gflops")).round(2).alias("exo_speedup"),
+        (pl.col("neon_gflops") / pl.col("numpy_gflops")).round(2).alias("neon_speedup"),
+    )
+    with pl.Config(tbl_rows=-1):
+        print(df)
+    df.write_csv(Path(__file__).parent / "results.csv")
+    _plot(df)
