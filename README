@@ -61,3 +61,9 @@ Write your own kernels:
     $ uv run xnumpy examples/demo.py --asm
     $ uv run xnumpy examples/demo.py --c
     $ uv run python examples/demo.py # jit
+
+References:
+
+- https://github.com/xdslproject/xdsl/blob/main/README.md
+- https://github.com/exo-lang/exo/blob/main/docs/README.md
+- https://github.com/kaylendog/exo-mlir

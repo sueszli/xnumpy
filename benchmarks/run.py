@@ -51,6 +51,7 @@ rows: list[dict[str, object]] = []
 
 #
 # matmul
+# note that numpy uses Apple Accelerate: https://developer.apple.com/documentation/accelerate/blas
 #
 
 
