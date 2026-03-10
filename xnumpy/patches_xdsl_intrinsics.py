@@ -7,7 +7,7 @@ from xdsl.dialects.llvm import FAbsOp, FNegOp, MaskedStoreOp
 from xdsl.ir import Operation, SSAValue
 from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewrite_pattern
 
-from xnumpy.patches_xdsl_llvm import FSqrtOp
+from xnumpy.patches_xdsl_llvm import FSqrtOp, VectorFMaxOp
 
 # `vec_*` intrinsic lowering: `llvm.CallOp` -> LLVM/vector dialect ops
 #
@@ -48,6 +48,9 @@ BuildResult: TypeAlias = tuple[list[Operation], SSAValue]
 BuilderFn: TypeAlias = Callable[..., BuildResult]
 MaskFn: TypeAlias = Callable[[SSAValue], MaskResult]
 Handler: TypeAlias = Callable[[list[SSAValue]], tuple[Operation, ...]]
+
+F32X4 = VectorType(f32, [4])
+F64X2 = VectorType(f64, [2])
 
 
 def _make_mask(lane_count: SSAValue, n_lanes: int, *, extend_lane_count: bool = False) -> MaskResult:
@@ -93,6 +96,7 @@ def _build_abs_pfx(dst: SSAValue, src: SSAValue, *, vec_type: VectorType) -> Bui
 
 
 def _build_binop(op_fn: Callable[..., Operation] | None, *ptrs: SSAValue, vec_type: VectorType) -> BuildResult:
+    # load all ptrs, apply op_fn to their values (or just return first value if op_fn is None)
     loads = [llvm.LoadOp(p, vec_type) for p in ptrs]
     vals = [ld.dereferenced_value for ld in loads]
     if op_fn is None:
@@ -101,39 +105,18 @@ def _build_binop(op_fn: Callable[..., Operation] | None, *ptrs: SSAValue, vec_ty
     return [*loads, result_op], result_op.res
 
 
-def _build_copy(dst: SSAValue, src: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = src[:]
-    return _build_binop(None, src, vec_type=vec_type)
+def _builder(op_fn: Callable[..., Operation] | None, *arg_indices: int) -> BuilderFn:
+    # shorthand for creating a BuilderFn that calls _build_binop.
+    # arg_indices select which call args to load: 0 = dst, 1 = first src, 2 = second src, ...
+    #
+    # e.g. _builder(llvm.FAddOp, 1, 2)  creates  (dst, a, b)  -> load a, load b, fadd
+    #      _builder(llvm.FAddOp, 0, 1)  creates  (dst, src)   -> load dst, load src, fadd
+    #      _builder(None, 1)            creates  (dst, src)   -> load src (copy)
+    def builder(dst: SSAValue, *srcs: SSAValue, vec_type: VectorType) -> BuildResult:
+        all_args = (dst, *srcs)
+        return _build_binop(op_fn, *(all_args[i] for i in arg_indices), vec_type=vec_type)
 
-
-def _build_neg(dst: SSAValue, src: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = -src[:]
-    return _build_binop(FNegOp, src, vec_type=vec_type)
-
-
-def _build_add(dst: SSAValue, src_a: SSAValue, src_b: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = src_a[:] + src_b[:]
-    return _build_binop(llvm.FAddOp, src_a, src_b, vec_type=vec_type)
-
-
-def _build_mul(dst: SSAValue, src_a: SSAValue, src_b: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = src_a[:] * src_b[:]
-    return _build_binop(llvm.FMulOp, src_a, src_b, vec_type=vec_type)
-
-
-def _build_add_red(dst: SSAValue, src: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = dst[:] + src[:]
-    return _build_binop(llvm.FAddOp, dst, src, vec_type=vec_type)
-
-
-def _build_fma(dst: SSAValue, src_a: SSAValue, src_b: SSAValue, src_c: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = src_a[:] * src_b[:] + src_c[:]
-    return _build_binop(vector.FMAOp, src_a, src_b, src_c, vec_type=vec_type)
-
-
-def _build_fma_red(dst: SSAValue, src_a: SSAValue, src_b: SSAValue, *, vec_type: VectorType) -> BuildResult:
-    # dst[:] = dst[:] + src_a[:] * src_b[:]
-    return _build_binop(vector.FMAOp, src_a, src_b, dst, vec_type=vec_type)
+    return builder
 
 
 def _build_broadcast(dst: SSAValue, scalar: SSAValue, *, vec_type: VectorType) -> BuildResult:
@@ -219,24 +202,6 @@ def _build_neon_square(dst: SSAValue, src: SSAValue, *, vec_type: VectorType) ->
     return (load, result, llvm.StoreOp(result.res, dst))
 
 
-def _build_neon_fmax_acc(acc: SSAValue, src: SSAValue, *, vec_type: VectorType) -> tuple[Operation, ...]:
-    # acc[:] = max(acc[:], src[:])
-    from xnumpy.patches_xdsl_llvm import VectorFMaxOp
-
-    load_acc = llvm.LoadOp(acc, vec_type)
-    load_src = llvm.LoadOp(src, vec_type)
-    result = VectorFMaxOp(load_acc.dereferenced_value, load_src.dereferenced_value)
-    return (load_acc, load_src, result, llvm.StoreOp(result.res, acc))
-
-
-def _build_neon_add_acc(acc: SSAValue, src: SSAValue, *, vec_type: VectorType) -> tuple[Operation, ...]:
-    # acc[:] += src[:]
-    load_acc = llvm.LoadOp(acc, vec_type)
-    load_src = llvm.LoadOp(src, vec_type)
-    result = llvm.FAddOp(load_acc.dereferenced_value, load_src.dereferenced_value)
-    return (load_acc, load_src, result, llvm.StoreOp(result.res, acc))
-
-
 def _build_neon_unop(op_cls: type, dst: SSAValue, src: SSAValue, *, vec_type: VectorType) -> tuple[Operation, ...]:
     # dst[:] = op(src[:])
     load = llvm.LoadOp(src, vec_type)
@@ -255,64 +220,86 @@ def _build_neon_zero(dst: SSAValue, *, vec_type: VectorType) -> tuple[Operation,
 
 
 def _make_intrinsics() -> dict[str, Handler]:
+    # callee name -> handler(args: list[SSAValue]) -> tuple[Operation, ...]
     entries: dict[str, Handler] = {}
 
-    _OPS: list[tuple[str, BuilderFn, BuilderFn | None, bool]] = [
+    # vec_*: (name, builder, pfx_builder, uses_ext)
+    ops: list[tuple[str, BuilderFn, BuilderFn | None, bool]] = [
         ("abs", _build_abs, _build_abs_pfx, True),
-        ("add_red", _build_add_red, None, True),
-        ("copy", _build_copy, None, True),
-        ("load", _build_copy, None, True),
-        ("store", _build_copy, None, False),
-        ("add", _build_add, None, False),
-        ("mul", _build_mul, None, False),
-        ("neg", _build_neg, None, False),
+        ("add_red", _builder(llvm.FAddOp, 0, 1), None, True),  # dst += src
+        ("copy", _builder(None, 1), None, True),  # dst = src
+        ("load", _builder(None, 1), None, True),  # dst = src
+        ("store", _builder(None, 1), None, False),  # dst = src
+        ("add", _builder(llvm.FAddOp, 1, 2), None, False),  # dst = a + b
+        ("mul", _builder(llvm.FMulOp, 1, 2), None, False),  # dst = a * b
+        ("neg", _builder(FNegOp, 1), None, False),  # dst = -src
         ("brdcst_scl", _build_broadcast, None, False),
-        ("fmadd2", _build_fma, None, False),
-        ("fmadd1", _build_fma, None, False),
-        ("fmadd_red", _build_fma_red, None, False),
+        ("fmadd2", _builder(vector.FMAOp, 1, 2, 3), None, False),  # dst = a * b + c
+        ("fmadd1", _builder(vector.FMAOp, 1, 2, 3), None, False),  # dst = a * b + c
+        ("fmadd_red", _builder(vector.FMAOp, 1, 2, 0), None, False),  # dst = a * b + dst
         ("zero", _build_zero, None, False),
     ]
-
-    _F32X4 = VectorType(f32, [4])
-    _F64X2 = VectorType(f64, [2])
-
-    for name, builder, pfx_builder, uses_ext in _OPS:
+    for name, builder, pfx_builder, uses_ext in ops:
         actual_pfx_builder = pfx_builder if pfx_builder is not None else builder
         chosen_f64_mask = _mask_f64x2_ext if uses_ext else _mask_f64x2
+        entries[f"vec_{name}_f32x4"] = _plain_handler(builder, F32X4)
+        entries[f"vec_{name}_f32x4_pfx"] = _pfx_handler(actual_pfx_builder, F32X4, _mask_f32x4)
+        entries[f"vec_{name}_f64x2"] = _plain_handler(builder, F64X2)
+        entries[f"vec_{name}_f64x2_pfx"] = _pfx_handler(actual_pfx_builder, F64X2, chosen_f64_mask)
 
-        entries[f"vec_{name}_f32x4"] = _plain_handler(builder, _F32X4)
-        entries[f"vec_{name}_f32x4_pfx"] = _pfx_handler(actual_pfx_builder, _F32X4, _mask_f32x4)
-        entries[f"vec_{name}_f64x2"] = _plain_handler(builder, _F64X2)
-        entries[f"vec_{name}_f64x2_pfx"] = _pfx_handler(actual_pfx_builder, _F64X2, chosen_f64_mask)
+    # vec_reduce_*
+    for suffix, vt in [
+        ("f32x4", F32X4),
+        ("f64x2", F64X2),
+    ]:
+        entries[f"vec_reduce_add_scl_{suffix}"] = _reduce_handler(vt)
 
-    entries["vec_reduce_add_scl_f32x4"] = _reduce_handler(_F32X4)
-    entries["vec_reduce_add_scl_f64x2"] = _reduce_handler(_F64X2)
+    # neon binops: dst = op(a, b)
+    _NEON_BINOPS: list[tuple[str, type]] = [
+        ("add", llvm.FAddOp),
+        ("sub", llvm.FSubOp),
+        ("mul", llvm.FMulOp),
+        ("div", llvm.FDivOp),
+        ("vadd", llvm.FAddOp),
+        ("vsub", llvm.FSubOp),
+        ("vmul", llvm.FMulOp),
+    ]
+    for op_name, op_cls in _NEON_BINOPS:
+        entries[f"neon_{op_name}_f32x4"] = lambda args, o=op_cls: _build_neon_binop(o, *args, vec_type=F32X4)
 
-    entries["neon_storeu_f32x4"] = lambda args: _build_neon_storeu(*args, vec_type=_F32X4)
-    entries["neon_loadu_f32x4"] = lambda args: _build_neon_storeu(*args, vec_type=_F32X4)
-    entries["neon_fmadd_f32x4"] = lambda args: _build_neon_fmadd(*args, vec_type=_F32X4)
-    entries["neon_broadcast_f32x4"] = lambda args: _build_neon_broadcast(*args, vec_type=_F32X4)
-    entries["neon_zero_f32x4"] = lambda args: _build_neon_zero(args[0], vec_type=_F32X4)
-    entries["neon_add_f32x4"] = lambda args: _build_neon_binop(llvm.FAddOp, *args, vec_type=_F32X4)
-    entries["neon_mul_f32x4"] = lambda args: _build_neon_binop(llvm.FMulOp, *args, vec_type=_F32X4)
-    entries["neon_sub_f32x4"] = lambda args: _build_neon_binop(llvm.FSubOp, *args, vec_type=_F32X4)
-    entries["neon_neg_f32x4"] = lambda args: _build_neon_unop(FNegOp, *args, vec_type=_F32X4)
-    entries["neon_vadd_f32x4"] = lambda args: _build_neon_binop(llvm.FAddOp, *args, vec_type=_F32X4)
-    entries["neon_vsub_f32x4"] = lambda args: _build_neon_binop(llvm.FSubOp, *args, vec_type=_F32X4)
-    entries["neon_vmul_f32x4"] = lambda args: _build_neon_binop(llvm.FMulOp, *args, vec_type=_F32X4)
-    entries["neon_vneg_f32x4"] = lambda args: _build_neon_unop(FNegOp, *args, vec_type=_F32X4)
-    entries["neon_storeu_f64x2"] = lambda args: _build_neon_storeu(*args, vec_type=_F64X2)
-    entries["neon_loadu_f64x2"] = lambda args: _build_neon_storeu(*args, vec_type=_F64X2)
-    entries["neon_fmadd_f64x2"] = lambda args: _build_neon_fmadd(*args, vec_type=_F64X2)
-    entries["neon_broadcast_f64x2"] = lambda args: _build_neon_broadcast(*args, vec_type=_F64X2)
-    entries["neon_square_f32x4"] = lambda args: _build_neon_square(*args, vec_type=_F32X4)
-    entries["neon_add_acc_f32x4"] = lambda args: _build_neon_add_acc(*args, vec_type=_F32X4)
-    entries["neon_fmax_acc_f32x4"] = lambda args: _build_neon_fmax_acc(*args, vec_type=_F32X4)
-    entries["neon_div_f32x4"] = lambda args: _build_neon_binop(llvm.FDivOp, *args, vec_type=_F32X4)
-    entries["neon_sqrt_f32x4"] = lambda args: _build_neon_unop(FSqrtOp, *args, vec_type=_F32X4)
-    entries["neon_mul_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FMulOp, args[0], args[0], args[1], vec_type=_F32X4)
-    entries["neon_sub_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FSubOp, args[0], args[0], args[1], vec_type=_F32X4)
-    entries["neon_div_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FDivOp, args[0], args[0], args[1], vec_type=_F32X4)
+    # neon acc binops: acc = op(acc, src)
+    _NEON_ACC_OPS: list[tuple[str, type]] = [
+        ("add_acc", llvm.FAddOp),
+        ("fmax_acc", VectorFMaxOp),
+        ("mul_acc", llvm.FMulOp),
+        ("sub_acc", llvm.FSubOp),
+        ("div_acc", llvm.FDivOp),
+    ]
+    for op_name, op_cls in _NEON_ACC_OPS:
+        entries[f"neon_{op_name}_f32x4"] = lambda args, o=op_cls: _build_neon_binop(o, args[0], args[0], args[1], vec_type=F32X4)
+
+    # neon unops: dst = op(src)
+    _NEON_UNOPS: list[tuple[str, type]] = [
+        ("neg", FNegOp),
+        ("vneg", FNegOp),
+        ("sqrt", FSqrtOp),
+    ]
+    for op_name, op_cls in _NEON_UNOPS:
+        entries[f"neon_{op_name}_f32x4"] = lambda args, o=op_cls: _build_neon_unop(o, *args, vec_type=F32X4)
+
+    # neon load/store/fmadd/broadcast (both types)
+    for suffix, vt in [
+        ("f32x4", F32X4),
+        ("f64x2", F64X2),
+    ]:
+        entries[f"neon_storeu_{suffix}"] = lambda args, v=vt: _build_neon_storeu(*args, vec_type=v)
+        entries[f"neon_loadu_{suffix}"] = lambda args, v=vt: _build_neon_storeu(*args, vec_type=v)
+        entries[f"neon_fmadd_{suffix}"] = lambda args, v=vt: _build_neon_fmadd(*args, vec_type=v)
+        entries[f"neon_broadcast_{suffix}"] = lambda args, v=vt: _build_neon_broadcast(*args, vec_type=v)
+
+    # neon misc
+    entries["neon_zero_f32x4"] = lambda args: _build_neon_zero(args[0], vec_type=F32X4)
+    entries["neon_square_f32x4"] = lambda args: _build_neon_square(*args, vec_type=F32X4)
 
     return entries
 
