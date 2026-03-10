@@ -270,7 +270,7 @@ def neon_broadcast_store_f64(out: f64[2] @ DRAM, s: f64[1] @ DRAM):
 
 
 #
-# JIT helper
+# jit helper
 #
 
 

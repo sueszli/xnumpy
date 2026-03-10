@@ -1,0 +1,86 @@
+Kernel Roadmap: microgpt
+========================
+
+Goal: implement all compute kernels needed for Karpathy's microgpt, then wire
+them into a working tiny transformer that trains on character-level names data.
+
+All kernels use auto-vectorization only (let LLVM emit SIMD). No hand-written
+NEON intrinsics -- auto-vec consistently beats NEON by 20-35% because LLVM's
+optimizer sees more context and schedules instructions better than we can by hand.
+
+References:
+  Blog post:   https://karpathy.github.io/2026/02/12/microgpt/
+  Source code:  https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95
+
+microgpt architecture:
+  - 1 transformer layer, 16-dim embeddings, 4 attention heads, 4-dim per head
+  - 16-token context window, vocab size 27 (26 chars + BOS)
+  - ~4,192 parameters total
+  - RMSNorm (not LayerNorm), ReLU (not GELU), no biases
+  - Scalar autograd with topological-sort backward pass
+  - Adam optimizer with linear LR decay
+  - Trains 1000 steps on character names, then generates samples
+
+
+Already Done (Compute Kernels)
+------------------------------
+
+All individual kernels for microgpt are now implemented. 
+All of the following have auto-vectorized versions and explicit NEON intrinsic variants (*_neon.py).
+
+[x] softmax        -- exp(x - max) / sum(exp(x - max)) (fused single-pass)
+[x] matmul         -- C = A @ B (tiled, cache-optimized)
+[x] saxpy          -- y[i] += a * x[i]
+[x] relu           -- y[i] = max(0, x[i])
+[x] elementwise add-- z[i] = x[i] + y[i]
+[x] rmsnorm        -- sum-of-squares + scaling (split kernels)
+[x] matvec         -- y[j] = sum_i(W[j][i] * x[i]) (tiled rows)
+[x] embedding      -- row copy from lookup table
+[x] cross-entropy  -- loss = -log(softmax(logits)[target]) (fused sum-exp)
+[x] dot product    -- score = sum_j(q[j] * k[j]) / sqrt(d) (fused multiply/sum/scale)
+[x] weighted sum   -- attention output aggregation
+[x] fused attention-- softmax(Q @ K^T / sqrt(d)) @ V (FlashAttention style streaming)
+[x] adam optimizer -- parameter update fusing m, v, m_hat, v_hat, param updates
+
+
+Still TODO: Integration & Autograd
+----------------------------------
+Now that all individual computational kernels are complete, the next steps are 
+to assemble the microgpt model, hook up autograd, and build the training loop.
+
+### Phase 1: Tensor & Autograd Engine
+[ ] Implement a lightweight Tensor class that wraps NumPy arrays.
+[ ] Implement scalar autograd engine with a topological sort backward pass (can stay in pure Python for now).
+[ ] Map autograd backward functions to our JIT kernels where applicable (or fallback to NumPy for backward passes if JIT is strictly focused on forward pass speed).
+
+### Phase 2: Forward Pass & Model Setup
+[ ] Wire the JIT kernels into a `gpt(token_id, pos_id, kv_cache)` forward pass function.
+   - Embedding lookups (token and pos) -> elementwise add -> rmsnorm.
+   - Attention: q, k, v matvecs -> fused_attention / dot+softmax+weighted_sum -> output matvec -> residual add.
+   - MLP: rmsnorm -> fc1 -> relu -> fc2 -> residual add.
+   - Output: lm_head matvec -> logits.
+[ ] Initialize model parameters (~4,192 total) and KV cache buffers.
+
+### Phase 3: Training Loop
+[ ] Implement the single training step function:
+   - For each token in sequence: forward pass -> gather logits -> compute cross_entropy loss.
+   - Average losses across the sequence.
+   - Execute backward pass (autograd).
+   - Apply `adam_step` kernel for all parameters using the computed gradients.
+[ ] Load and preprocess the character-level names dataset.
+[ ] Run the 1000-step training loop with linear LR decay.
+
+### Phase 4: Inference & Generation
+[ ] Autoregressive sampling loop:
+   - Forward pass -> logits.
+   - Softmax with temperature.
+   - Sample from probabilities -> next token.
+   - Repeat until BOS or max length.
+[ ] Generate sample names to verify learning and correctness.
+
+### Phase 5: End-to-end Benchmark
+[ ] Compare wall-clock time for 1000 training steps:
+   - Original pure Python scalar microgpt
+   - NumPy vectorized implementation (no autograd, manual gradients)
+   - xnumpy JIT kernels (our version)
+   The xnumpy version should crush the others at these tiny sizes due to fused operations and zero dispatch overhead compared to native Python/NumPy loops.

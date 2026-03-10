@@ -22,7 +22,7 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
     exp_diff: f32 @ Stack
     exp_score: f32 @ Stack
     inv_l: f32 @ Stack
-    
+
     t_diff: f32 @ Stack
     y_d: f32 @ Stack
     e5_d: f32 @ Stack
@@ -34,7 +34,6 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
     s2_d: f32 @ Stack
     s3_d: f32 @ Stack
     s4_d: f32 @ Stack
-    s5_d: f32 @ Stack
 
     t_score: f32 @ Stack
     y_s: f32 @ Stack
@@ -47,7 +46,6 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
     s2_s: f32 @ Stack
     s3_s: f32 @ Stack
     s4_s: f32 @ Stack
-    s5_s: f32 @ Stack
 
     for i in seq(0, SEQ):
         # j = 0
@@ -55,22 +53,22 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
         for d in seq(0, D):
             score += q[i, d] * k[0, d]
         score = score * scale[0]
-        
+
         m_new = score
         l_new = 1.0
         for d in seq(0, D):
             out[i, d] = v[0, d]
 
-        # j = 1 to SEQ-1
+        # j = 1 to seq-1
         for j in seq(1, SEQ):
             score = 0.0
             for d in seq(0, D):
                 score += q[i, d] * k[j, d]
             score = score * scale[0]
-            
+
             m_prev = m_new
             m_new = select(m_new, score, score, m_new)
-            
+
             # exp(m_prev - m_new)
             t_diff = m_prev - m_new
             y_d = t_diff * 0.03125
@@ -84,7 +82,7 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
             s3_d = s2_d * s2_d
             s4_d = s3_d * s3_d
             exp_diff = s4_d * s4_d
-            
+
             # exp(score - m_new)
             t_score = score - m_new
             y_s = t_score * 0.03125
@@ -98,13 +96,13 @@ def _fused_attention(SEQ: size, D: size, out: f32[SEQ, D] @ DRAM, q: f32[SEQ, D]
             s3_s = s2_s * s2_s
             s4_s = s3_s * s3_s
             exp_score = s4_s * s4_s
-            
+
             l_prev = l_new
             l_new = l_prev * exp_diff + exp_score
-            
+
             for d in seq(0, D):
                 out[i, d] = out[i, d] * exp_diff + exp_score * v[j, d]
-                
+
         inv_l = 1.0 / l_new
         for d in seq(0, D):
             out[i, d] = out[i, d] * inv_l

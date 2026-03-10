@@ -7,6 +7,8 @@ from xdsl.dialects.llvm import FAbsOp, FNegOp, MaskedStoreOp
 from xdsl.ir import Operation, SSAValue
 from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewrite_pattern
 
+from xnumpy.patches_xdsl_llvm import FSqrtOp
+
 # `vec_*` intrinsic lowering: `llvm.CallOp` -> LLVM/vector dialect ops
 #
 # Naming:
@@ -306,6 +308,11 @@ def _make_intrinsics() -> dict[str, Handler]:
     entries["neon_square_f32x4"] = lambda args: _build_neon_square(*args, vec_type=_F32X4)
     entries["neon_add_acc_f32x4"] = lambda args: _build_neon_add_acc(*args, vec_type=_F32X4)
     entries["neon_fmax_acc_f32x4"] = lambda args: _build_neon_fmax_acc(*args, vec_type=_F32X4)
+    entries["neon_div_f32x4"] = lambda args: _build_neon_binop(llvm.FDivOp, *args, vec_type=_F32X4)
+    entries["neon_sqrt_f32x4"] = lambda args: _build_neon_unop(FSqrtOp, *args, vec_type=_F32X4)
+    entries["neon_mul_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FMulOp, args[0], args[0], args[1], vec_type=_F32X4)
+    entries["neon_sub_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FSubOp, args[0], args[0], args[1], vec_type=_F32X4)
+    entries["neon_div_acc_f32x4"] = lambda args: _build_neon_binop(llvm.FDivOp, args[0], args[0], args[1], vec_type=_F32X4)
 
     return entries
 

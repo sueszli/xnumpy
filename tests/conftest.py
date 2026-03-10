@@ -10,7 +10,7 @@ from exo.API import Procedure
 
 from xnumpy.main import compile_jit, to_mlir
 
-# xDSL IRDL holds raw ctypes pointers. GC finalizer ordering -> dangling ptr -> segfault
+# xdsl irdl holds raw ctypes pointers. gc finalizer ordering -> dangling ptr -> segfault
 _gc.disable()
 _gc.set_threshold(0)
 _gc.enable = lambda: None

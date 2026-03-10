@@ -33,7 +33,7 @@ _DTYPES: dict[str, tuple[type, type]] = {
 
 @cache
 def llvm_bin_path() -> Path:
-    # resolve LLVM bin dir from env, PATH, or homebrew
+    # resolve llvm bin dir from env, path, or homebrew
     if env := os.environ.get("LLVM_BIN"):
         return Path(env)
     if mlir_opt := shutil.which("mlir-opt"):
@@ -55,7 +55,7 @@ def _disk_cache(fn: Callable[..., Path]) -> Callable[..., Path]:
         so_path = fn(source, *args, **kwargs)
         tmp = cache_dir / f"{h}.{os.getpid()}.tmp"
         shutil.copy2(so_path, tmp)
-        os.replace(str(tmp), str(cached))  # atomic on POSIX
+        os.replace(str(tmp), str(cached))  # atomic on posix
         return cached
 
     return wrapper
@@ -105,7 +105,7 @@ def _call(fn: Callable, proc_ir: Any, kwargs: dict[str, Any], *, ctx: bool = Fal
 
 
 def compile_exo(proc: Procedure) -> Callable[..., dict[str, np.ndarray]]:
-    # proc -> exo C shared lib -> callable
+    # proc -> exo c shared lib -> callable
     proc_ir = proc._loopir_proc
     so_path = _exo_bin_path(proc)
     lib_fn = getattr(ctypes.CDLL(str(so_path)), proc_ir.name)
@@ -115,7 +115,7 @@ def compile_exo(proc: Procedure) -> Callable[..., dict[str, np.ndarray]]:
 
 
 def compile_mlir(proc: Procedure, module: ModuleOp) -> Callable[..., dict[str, np.ndarray]]:
-    # proc + MLIR module -> shared lib -> callable
+    # proc + mlir module -> shared lib -> callable
     proc_ir = proc._loopir_proc
     so_path = _mlir_bin_path(module)
     lib_fn = getattr(ctypes.CDLL(str(so_path)), proc_ir.name)

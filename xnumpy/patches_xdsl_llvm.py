@@ -17,8 +17,8 @@ from xdsl.utils.hints import isa
 
 @irdl_op_definition
 class VectorFMaxOp(IRDLOperation):
-    # element-wise max of two vectors, lowered to @llvm.maxnum.v{n}{elem} in LLVMLiteGenerator
-    name = "xnumpy.vfmax"
+    # element-wise max of two vectors, lowered to @llvm.maxnum.v{n}{elem} in llvmlitegenerator
+    name = "llvm.intr.maxnum"
 
     T: ClassVar = VarConstraint("T", AnyAttr())
 
@@ -30,6 +30,21 @@ class VectorFMaxOp(IRDLOperation):
 
     def __init__(self, lhs: Operation | SSAValue, rhs: Operation | SSAValue):
         super().__init__(operands=[lhs, rhs], result_types=[SSAValue.get(lhs).type])
+
+
+@irdl_op_definition
+class FSqrtOp(IRDLOperation):
+    name = "llvm.intr.sqrt"
+
+    T: ClassVar = VarConstraint("T", AnyAttr())
+
+    arg = operand_def(T)
+    res = result_def(T)
+
+    traits = traits_def(Pure())
+
+    def __init__(self, arg: Operation | SSAValue):
+        super().__init__(operands=[arg], result_types=[SSAValue.get(arg).type])
 
 
 @irdl_op_definition
@@ -103,17 +118,17 @@ class CondBrOp(IRDLOperation):
 
 # `memref` -> `llvm.ptr` lowering: replace structured memory ops with raw pointer arithmetic
 #
-# Standard MLIR lowers memref through a "descriptor" struct (base ptr, offset, sizes, strides).
-# We skip that and go straight to flat pointer math because Exo only emits statically-shaped,
-# row-major memrefs with no affine maps. The descriptor is unnecessary overhead.
+# standard mlir lowers memref through a "descriptor" struct (base ptr, offset, sizes, strides).
+# we skip that and go straight to flat pointer math because exo only emits statically-shaped,
+# row-major memrefs with no affine maps. the descriptor is unnecessary overhead.
 #
-# Pipeline order matters:
+# pipeline order matters:
 # ----------------------
-#     1. ExtendedConvertMemRefToPtr   — rewrite load/store/subview while shape info is still on the MemRefType
-#     2. RewriteMemRefTypes           — erase MemRefType -> llvm.ptr everywhere
+#     1. extendedconvertmemreftoptr   — rewrite load/store/subview while shape info is still on the memreftype
+#     2. rewritememreftypes           — erase memreftype -> llvm.ptr everywhere
 #     3. reconcile-unrealized-casts   — clean up identity casts left behind
 #
-# Example (ConvertLoadPattern):
+# example (convertloadpattern):
 # -----------------------------
 #     memref.load %buf[%i, %j] : memref<4x8xf32>
 #     =>
@@ -137,7 +152,7 @@ def _unwrap_i64(val: SSAValue) -> SSAValue:
 
 def _loop_upper_bound_as_i64(index: SSAValue) -> SSAValue | None:
     # for dynamic dims: walk index -> block_arg#0 -> find llvm.icmp in the loop header -> extract the bound
-    # e.g. `icmp slt %iv, %N` => return %N as the dim size
+    # e.g. `icmp slt %iv, %n` => return %n as the dim size
     if isinstance(index, OpResult) and isinstance(index.op, UnrealizedConversionCastOp):
         inputs = list(index.op.operands)
         iv = inputs[0] if len(inputs) == 1 else index
@@ -173,7 +188,7 @@ def _flat_offset(indices: Sequence[SSAValue], rank: int, dim_size_fn, ins) -> SS
 
 
 def _offset_ptr_gep(base: SSAValue, indices: Sequence[SSAValue], rank: int, dim_size_fn, elem_type, ins) -> SSAValue:
-    # compute &base[indices] using GEP with element type (for scalar load/store, enables LLVM vectorization)
+    # compute &base[indices] using gep with element type (for scalar load/store, enables llvm vectorization)
     flat = _flat_offset(indices, rank, dim_size_fn, ins)
     # cast base memref -> llvm.ptr, then add byte offset via ptr-to-int round-trip
     base_ptr = ins(UnrealizedConversionCastOp.get([base], [LLVMPointerType()])).results[0]
@@ -195,7 +210,7 @@ def _offset_ptr_raw(base: SSAValue, indices: Sequence[SSAValue], rank: int, dim_
 
 
 def _dim_size_fn(shape: tuple[int, ...], indices: Sequence[SSAValue], ins: Callable) -> Callable[[int], SSAValue]:
-    # return a closure that resolves dimension i to its runtime SSA size (static constant or dynamic loop bound)
+    # return a closure that resolves dimension i to its runtime ssa size (static constant or dynamic loop bound)
     def dim_size(i: int) -> SSAValue:
         if shape[i] != DYNAMIC_INDEX:
             return _iconst(ins, shape[i])
@@ -207,7 +222,7 @@ def _dim_size_fn(shape: tuple[int, ...], indices: Sequence[SSAValue], ins: Calla
 
 
 def _get_target_ptr(memref_val: SSAValue, memref_type: builtin.MemRefType, indices: list[SSAValue], rewriter: PatternRewriter) -> SSAValue:
-    # compute &memref_val[indices] using GEP (enables LLVM auto-vectorization for scalar load/store)
+    # compute &memref_val[indices] using gep (enables llvm auto-vectorization for scalar load/store)
     shape = memref_type.get_shape()
     ins = rewriter.insert_op
     return _offset_ptr_gep(memref_val, indices, len(shape), _dim_size_fn(shape, indices, ins), memref_type.element_type, ins)
@@ -241,9 +256,9 @@ class ConvertStorePattern(RewritePattern):
 class ConvertSubviewPattern(RewritePattern):
     # memref.subview %buf[offsets] => ptr to the start of the slice
     #
-    # subview carries both static offsets (baked into the op) and dynamic offsets (SSA values).
-    # MLIR encodes "this offset is dynamic" by setting the static value to DYNAMIC_INDEX (-1);
-    # the actual SSA value then comes from the op.offsets list in order.
+    # subview carries both static offsets (baked into the op) and dynamic offsets (ssa values).
+    # mlir encodes "this offset is dynamic" by setting the static value to dynamic_index (-1);
+    # the actual ssa value then comes from the op.offsets list in order.
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.SubviewOp, rewriter: PatternRewriter, /):
         assert isa(src_type := op.source.type, builtin.MemRefType)
@@ -254,7 +269,7 @@ class ConvertSubviewPattern(RewritePattern):
 
         ins = rewriter.insert_op
 
-        # merge static_offsets (constants) and dynamic offsets (SSA values) into one list
+        # merge static_offsets (constants) and dynamic offsets (ssa values) into one list
         all_offsets: list[SSAValue] = []
         dyn_iter = iter(op.offsets)
         for soff in op.static_offsets.iter_values():
@@ -265,14 +280,14 @@ class ConvertSubviewPattern(RewritePattern):
 
         result_ptr = _offset_ptr_raw(op.source, all_offsets, len(src_shape), lambda i: _iconst(ins, src_shape[i]), src_type.element_type.size, ins)
 
-        # wrap result as MemRefType so downstream load/store patterns still see the right shape for stride computation
+        # wrap result as memreftype so downstream load/store patterns still see the right shape for stride computation
         rewriter.replace_op(op, UnrealizedConversionCastOp.get([result_ptr], [op.result.type]))
 
 
 @dataclass
 class ConvertReinterpretCastOp(RewritePattern):
     # reinterpret_cast just changes the memref metadata (shape/strides) without moving data.
-    # after RewriteMemRefTypes erases all MemRefType -> llvm.ptr, both sides become the same type,
+    # after rewritememreftypes erases all memreftype -> llvm.ptr, both sides become the same type,
     # so this turns into an identity cast that reconcile-unrealized-casts will remove.
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: memref.ReinterpretCastOp, rewriter: PatternRewriter, /):
@@ -298,11 +313,11 @@ class ExtendedConvertMemRefToPtr(ModulePass):
 
 
 #
-# erase MemRefType on all remaining values
+# erase memreftype on all remaining values
 # (runs after the patterns above consumed shape info)
 #
-# Before:  %x : memref<4x8xf32>
-# After:   %x : !llvm.ptr
+# before:  %x : memref<4x8xf32>
+# after:   %x : !llvm.ptr
 #
 
 

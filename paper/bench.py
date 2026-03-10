@@ -81,7 +81,7 @@ def neon_broadcast_f32x4(dst: [f32][4] @ NEON, src: [f32][1] @ DRAM):
 
 
 #
-# saxpy (y += a*x, N=1024, f32)
+# saxpy (y += a*x, n=1024, f32)
 #
 
 

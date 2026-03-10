@@ -25,7 +25,7 @@ class Stack(Memory):
 
 
 class NEON(Memory):
-    # ARM NEON 128-bit vector memory (4×f32, 2×f64)
+    # arm neon 128-bit vector memory (4×f32, 2×f64)
 
     @classmethod
     def global_(cls) -> str:

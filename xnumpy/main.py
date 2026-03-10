@@ -60,7 +60,7 @@ _FCMP_PREDICATES: dict[str, tuple[str, bool]] = {  # mlir predicate -> (op, orde
 
 
 #
-# generate xDSL MLIR
+# generate xdsl mlir
 #
 
 
@@ -145,9 +145,9 @@ class IRGenerator:
                 assert False
 
     def _shape(self, tensor: T.Tensor, *, emit: bool = False) -> list[int | SSAValue]:
-        # extract tensor dimensions as ints (static) or SSA values (variable/computed).
-        # emit=False: variable dims -> DYNAMIC_INDEX (-1), for MemRefType declarations.
-        # emit=True:  variable dims -> live SSA values from symbol table, for stride/offset arithmetic.
+        # extract tensor dimensions as ints (static) or ssa values (variable/computed).
+        # emit=false: variable dims -> dynamic_index (-1), for memreftype declarations.
+        # emit=true:  variable dims -> live ssa values from symbol table, for stride/offset arithmetic.
         assert isinstance(tensor, T.Tensor)
 
         def from_expr(expr: object) -> int | SSAValue:
@@ -382,7 +382,7 @@ class IRGenerator:
         region.add_block(header_block)
         region.add_block(body_block)
 
-        # branch from current block to header with initial IV
+        # branch from current block to header with initial iv
         self.builder.insert(BrOp(header_block, lo))
 
         # header: condition check
@@ -402,7 +402,7 @@ class IRGenerator:
             for stmt in for_stmt.body:
                 self._stmt(stmt)
 
-            # after body: increment IV and branch back to header
+            # after body: increment iv and branch back to header
             next_iv = self._emit(llvm.AddOp(iv, step))
             self.builder.insert(BrOp(header_block, next_iv))
 
@@ -411,7 +411,7 @@ class IRGenerator:
         self.builder = Builder(insertion_point=InsertPoint.at_end(exit_block))
 
     def _stmt_alloc(self, alloc: LoopIR.Alloc) -> None:
-        # lower alloc to llvm.call @malloc (DRAM) or llvm.alloca (stack)
+        # lower alloc to llvm.call @malloc (dram) or llvm.alloca (stack)
         mem_name = alloc.mem.name()
         mem_space = StringAttr(mem_name)
         mlir_type = self._to_mlir_type(alloc.type, mem_space)
@@ -437,7 +437,7 @@ class IRGenerator:
         self._types[repr(alloc.name)] = alloc.type
 
     def _stmt_free(self, free: LoopIR.Free) -> None:
-        # lower free to llvm.call @free (DRAM) or no-op (stack)
+        # lower free to llvm.call @free (dram) or no-op (stack)
         is_heap_mem = free.mem.name() == "DRAM"
         if not is_heap_mem:
             return
@@ -472,7 +472,7 @@ class IRGenerator:
         mem_space = StringAttr(callee_arg.mem.name()) if hasattr(callee_arg, "mem") else None
         callee_type = type_fn(callee_arg.type, mem_space)
 
-        # scalars passed by reference (callee writes to them) must arrive as memref<1xT>
+        # scalars passed by reference (callee writes to them) must arrive as memref<1xt>
         scalar_passed_by_ref = not isinstance(callee_type, MemRefType) and IRGenerator._is_mutated(repr(callee_arg.name), callee_body)
         if scalar_passed_by_ref:
             callee_type = MemRefType(callee_type, [1], NoneAttr())
@@ -558,7 +558,7 @@ class IRGenerator:
     def generate(self, procs: list[LoopIR.proc]) -> ModuleOp:
         for proc in procs:
             self._generate_procedure(proc)
-        # declare external malloc/free for DRAM alloc/free lowering
+        # declare external malloc/free for dram alloc/free lowering
         self._insert_at_module(llvm.FuncOp("malloc", llvm.LLVMFunctionType([i64], llvm.LLVMPointerType()), llvm.LinkageAttr("external")))
         self._insert_at_module(llvm.FuncOp("free", llvm.LLVMFunctionType([llvm.LLVMPointerType()]), llvm.LinkageAttr("external")))
         return self.module
@@ -591,7 +591,7 @@ def _lower(procs: list[LoopIR.proc]) -> ModuleOp:
     # full lowering to llvm dialect
     _rewrite = lambda patterns: PatternRewriteWalker(GreedyRewritePatternApplier(patterns)).rewrite_module(module)
     ExtendedConvertMemRefToPtr().apply(ctx, module)  # memref.{load,store,subview,cast} -> llvm
-    _rewrite([RewriteMemRefTypes()])  # MemRefType -> llvm.ptr on all values
+    _rewrite([RewriteMemRefTypes()])  # memreftype -> llvm.ptr on all values
     _rewrite([ConvertVecIntrinsic()])  # vec_*/neon_* calls -> llvm/vector ops
     ReconcileUnrealizedCastsPass().apply(ctx, module)  # fold paired unrealized casts
     module.verify()
@@ -605,7 +605,7 @@ def _lower(procs: list[LoopIR.proc]) -> ModuleOp:
 
 
 def to_mlir(library: Procedure | Sequence[Procedure]) -> ModuleOp:
-    # exo procedures -> xDSL MLIR (LLVM dialect)
+    # exo procedures -> xdsl mlir (llvm dialect)
     if isinstance(library, Procedure):
         library = [library]
     compilable = [proc._loopir_proc for proc in library if not proc.is_instr()]
@@ -622,7 +622,7 @@ def to_mlir(library: Procedure | Sequence[Procedure]) -> ModuleOp:
 
 
 #
-# generate llvmlite IR, then JIT compile
+# generate llvmlite ir, then jit compile
 #
 
 
@@ -749,13 +749,13 @@ def _target_machine() -> llvmlite.binding.TargetMachine:
 
 
 def _to_llvmlite_moduleref(llvmlite_module: llvmlite.ir.Module) -> tuple[llvmlite.binding.ModuleRef, llvmlite.binding.TargetMachine]:
-    # llvmlite IR -> parsed + optimized LLVM module ref
+    # llvmlite ir -> parsed + optimized llvm module ref
     mod_ref = llvmlite.binding.parse_assembly(str(llvmlite_module))
     tm = _target_machine()
     pto = llvmlite.binding.PipelineTuningOptions()
-    pto.speed_level = 3  # O3 optimization
+    pto.speed_level = 3  # o3 optimization
     pto.loop_vectorization = True  # enable loop vectorizer
-    pto.slp_vectorization = True  # enable SLP vectorizer (straight-line code)
+    pto.slp_vectorization = True  # enable slp vectorizer (straight-line code)
     pb = llvmlite.binding.create_pass_builder(tm, pto)
     pb.getModulePassManager().run(mod_ref, pb)
     return mod_ref, tm
@@ -763,7 +763,7 @@ def _to_llvmlite_moduleref(llvmlite_module: llvmlite.ir.Module) -> tuple[llvmlit
 
 @cache
 def to_asm(module: ModuleOp) -> str:
-    # xDSL MLIR -> native assembly text
+    # xdsl mlir -> native assembly text
     mod_ref, tm = _to_llvmlite_moduleref(LLVMLiteGenerator.generate(module))
     return tm.emit_assembly(mod_ref)
 
@@ -790,10 +790,10 @@ def _disk_cache(name: object, generate: Callable[[], str]) -> str:
 
 
 def compile_jit(proc: Procedure) -> dict[str, object]:
-    # disk-cache llvmlite IR to skip exo analysis + xDSL lowering on repeated runs
+    # disk-cache llvmlite ir to skip exo analysis + xdsl lowering on repeated runs
     ir_text = _disk_cache(proc._loopir_proc.name, lambda: str(LLVMLiteGenerator.generate(to_mlir(proc))))
 
-    # parse + O3 optimize
+    # parse + o3 optimize
     mod_ref = llvmlite.binding.parse_assembly(ir_text)
     tm = _target_machine()
     pto = llvmlite.binding.PipelineTuningOptions()
@@ -808,7 +808,7 @@ def compile_jit(proc: Procedure) -> dict[str, object]:
     engine.finalize_object()
     engine.run_static_constructors()
 
-    # extract func pointers from IR text (no xDSL module needed on cache hit)
+    # extract func pointers from ir text (no xdsl module needed on cache hit)
     fns: dict[str, object] = {}
     for name in re.findall(r'define void @"?(\w+)"?\(', ir_text):
         fns[name] = JitFunc(engine.get_function_address(name), engine)
