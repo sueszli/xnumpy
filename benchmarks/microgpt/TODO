@@ -9,7 +9,7 @@ NEON intrinsics -- auto-vec consistently beats NEON by 20-35% because LLVM's
 optimizer sees more context and schedules instructions better than we can by hand.
 
 References:
-  Blog post:   https://karpathy.github.io/2026/02/12/microgpt/
+  Blog post:    https://karpathy.github.io/2026/02/12/microgpt/
   Source code:  https://gist.githubusercontent.com/karpathy/8627fe009c40f57531cb18360106ce95/raw/14fb038816c7aae0bb9342c2dbf1a51dd134a5ff/microgpt.py
 
 microgpt architecture:
@@ -43,44 +43,23 @@ All of the following have auto-vectorized versions and explicit NEON intrinsic v
 [x] adam optimizer -- parameter update fusing m, v, m_hat, v_hat, param updates
 
 
-Still TODO: Integration & Autograd
-----------------------------------
-Now that all individual computational kernels are complete, the next steps are 
-to assemble the microgpt model, hook up autograd, and build the training loop.
+Missing — backward pass kernels
+-------------------------------
 
-### Phase 1: Tensor & Autograd Engine
-[ ] Implement a lightweight Tensor class that wraps NumPy arrays.
-[ ] Implement scalar autograd engine with a topological sort backward pass (can stay in pure Python for now).
-[ ] Map autograd backward functions to our JIT kernels where applicable (or fallback to NumPy for backward passes if JIT is strictly focused on forward pass speed).
+microgpt.py uses scalar autograd (Value.backward()). To replace that with vectorized kernels, you'd need backward variants for every differentiable operation:
 
-### Phase 2: Forward Pass & Model Setup
-[ ] Wire the JIT kernels into a `gpt(token_id, pos_id, kv_cache)` forward pass function.
-   - Embedding lookups (token and pos) -> elementwise add -> rmsnorm.
-   - Attention: q, k, v matvecs -> fused_attention / dot+softmax+weighted_sum -> output matvec -> residual add.
-   - MLP: rmsnorm -> fc1 -> relu -> fc2 -> residual add.
-   - Output: lm_head matvec -> logits.
-[ ] Initialize model parameters (~4,192 total) and KV cache buffers.
+1. linear_backward — two parts:
+   - dx = dout @ W^T (matvec with transposed weight matrix — current matvec.py only does y = W @ x, not transposed)
+   - dW = outer(dout, x) (rank-1 outer product update — no kernel exists)
+2. softmax_backward — dx_i = softmax_i * (dout_i - sum(dout * softmax))
+3. rmsnorm_backward — backward through the RMS normalization (involves recomputing the scale and a reduction)
+4. relu_backward — dx = dout * (x > 0) (masked passthrough)
+5. cross_entropy_backward — dlogits[i] = softmax[i] - 1{i == target} (softmax gradient combined with log-loss)
+6. embedding_backward — scatter-add: dW_emb[token_id] += dout (gradient accumulation into specific embedding rows)
+7. attention_backward — backward through Q·K^T scaling, softmax, and V weighting (or compose from the above primitives)
 
-### Phase 3: Training Loop
-[ ] Implement the single training step function:
-   - For each token in sequence: forward pass -> gather logits -> compute cross_entropy loss.
-   - Average losses across the sequence.
-   - Execute backward pass (autograd).
-   - Apply `adam_step` kernel for all parameters using the computed gradients.
-[ ] Load and preprocess the character-level names dataset.
-[ ] Run the 1000-step training loop with linear LR decay.
+Missing — minor forward utilities
+---------------------------------
 
-### Phase 4: Inference & Generation
-[ ] Autoregressive sampling loop:
-   - Forward pass -> logits.
-   - Softmax with temperature.
-   - Sample from probabilities -> next token.
-   - Repeat until BOS or max length.
-[ ] Generate sample names to verify learning and correctness.
-
-### Phase 5: End-to-end Benchmark
-[ ] Compare wall-clock time for 1000 training steps:
-   - Original pure Python scalar microgpt
-   - NumPy vectorized implementation (no autograd, manual gradients)
-   - xnumpy JIT kernels (our version)
-   The xnumpy version should crush the others at these tiny sizes due to fused operations and zero dispatch overhead compared to native Python/NumPy loops.
+- Scalar multiply / divide on vectors (for / head_dim**0.5 scaling and / temperature) — trivial, could be a variant of saxpy
+- Transposed matvec (y = W^T @ x) — needed in both forward (attention projection gather) and backward
