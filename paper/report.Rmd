@@ -15,7 +15,7 @@ header-includes:
   - \usepackage{fancyhdr}
   - \usepackage{abstract}
   - \usepackage{booktabs}
-  - \usepackage{float}
+  - \usepackage{caption}
   - \titleformat{\section}{\normalfont\large\bfseries}{\thesection.}{0.5em}{}
   - \titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.5em}{}
   - \titlespacing*{\section}{0pt}{1.8ex plus 0.3ex minus 0.2ex}{0.8ex plus 0.1ex}
@@ -36,13 +36,15 @@ classoption: twocolumn
 fontsize: 10pt
 geometry: "a4paper,left=0.7in,right=0.7in,top=0.75in,bottom=0.75in"
 urlcolor: blue
-bibliography: []
+bibliography: references.bib
+biblio-style: unsrt
+natbib: true
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
                       fig.width=3.4, fig.height=2.4, fig.align="center",
-                      out.width="\\columnwidth", fig.pos="H")
+                      out.width="\\columnwidth", fig.env="center")
 library(ggplot2); library(tidyr); library(dplyr); library(forcats)
 
 theme_paper <- theme_minimal(base_size=9) +
@@ -80,9 +82,9 @@ Exo is a user-schedulable language for hardware kernels that only emits C code, 
 
 Writing fast numerical code in Python typically means writing C. The programmer implements a kernel, compiles it to a shared library, loads the result via \texttt{ctypes}, and hopes the pointer types are correct. Changing anything, whether reordering a loop or adjusting a tile size, requires repeating the entire cycle.
 
-Exo [ikarashi2022exo] is a Python-embedded DSL for hardware kernels. The programmer writes a loop nest and transforms it through semantics-preserving scheduling primitives. However, Exo only generates C. The programmer still needs a C compiler, a build system, and an FFI bridge.
+Exo \cite{ikarashi2022exo} is a Python-embedded DSL for hardware kernels. The programmer writes a loop nest and transforms it through semantics-preserving scheduling primitives. However, Exo only generates C. The programmer still needs a C compiler, a build system, and an FFI bridge.
 
-We present a JIT compilation path that skips C entirely. Instead of going from Exo to C to clang to a shared object to ctypes, we go from Exo directly to native code in one Python process. We use xDSL [fehr2025xdsl] (Python-native MLIR) to lower Exo's IR to the LLVM dialect, then llvmlite [numba2015llvmlite] (from Numba) to JIT-compile via MCJIT. The result is a callable function pointer, usable with NumPy arrays through a C extension with \texttt{vectorcall} protocol.
+We present a JIT compilation path that skips C entirely. Instead of going from Exo to C to clang to a shared object to ctypes, we go from Exo directly to native code in one Python process. We use xDSL \cite{fehr2025xdsl} (Python-native MLIR) to lower Exo's IR to the LLVM dialect, then llvmlite \cite{numba2015llvmlite} (from Numba) to JIT-compile via MCJIT. The result is a callable function pointer, usable with NumPy arrays through a C extension with \texttt{vectorcall} protocol.
 
 We focus our evaluation on three fused multi-pass kernels, namely softmax, cross-entropy loss, and RMSNorm, where kernel fusion provides a sustained advantage over NumPy. We additionally benchmark eight simpler kernels (SAXPY, add, ReLU, dot, embedding, matmul, matvec, weighted sum) as baselines. Each kernel is implemented in two variants: an auto-vectorized version (relying on LLVM's vectorizer) and a hand-written NEON intrinsics version using Exo's \texttt{@instr} mechanism.
 
@@ -90,11 +92,11 @@ We focus our evaluation on three fused multi-pass kernels, namely softmax, cross
 
 Our pipeline chains three independent projects; we summarize each below.
 
-\textbf{Exo} [ikarashi2022exo] is a language for exocompilation. Instead of hiding hardware-specific optimizations inside the compiler, it exposes them as user-level scheduling operations. The programmer writes a loop nest (the algorithm) and transforms it through rewrites (the schedule). Transforms include \texttt{fission}, \texttt{reorder\_loops}, \texttt{divide\_loop}, and \texttt{unroll\_loop}. Each transform preserves semantics. Exo's \texttt{@instr} decorator allows declaring custom hardware intrinsics with scheduling-visible semantics. Exo currently emits C only.
+\textbf{Exo} \cite{ikarashi2022exo} is a language for exocompilation. Instead of hiding hardware-specific optimizations inside the compiler, it exposes them as user-level scheduling operations. The programmer writes a loop nest (the algorithm) and transforms it through rewrites (the schedule). Transforms include \texttt{fission}, \texttt{reorder\_loops}, \texttt{divide\_loop}, and \texttt{unroll\_loop}. Each transform preserves semantics. Exo's \texttt{@instr} decorator allows declaring custom hardware intrinsics with scheduling-visible semantics. Exo currently emits C only.
 
-\textbf{xDSL} [fehr2025xdsl] reimplements MLIR's core infrastructure in pure Python, including SSA-based IRs, dialects, regions, and pattern rewriting. It provides the same \texttt{memref}, \texttt{llvm}, and \texttt{builtin} dialect operations as upstream MLIR without requiring a C++ LLVM build.
+\textbf{xDSL} \cite{fehr2025xdsl} reimplements MLIR's core infrastructure in pure Python, including SSA-based IRs, dialects, regions, and pattern rewriting. It provides the same \texttt{memref}, \texttt{llvm}, and \texttt{builtin} dialect operations as upstream MLIR without requiring a C++ LLVM build.
 
-\textbf{llvmlite} [numba2015llvmlite] provides a Python API for constructing LLVM IR and JIT-compiling via MCJIT. The programmer constructs an \texttt{ir.Module}, parses it into MCJIT, and retrieves a function pointer by name.
+\textbf{llvmlite} \cite{numba2015llvmlite} provides a Python API for constructing LLVM IR and JIT-compiling via MCJIT. The programmer constructs an \texttt{ir.Module}, parses it into MCJIT, and retrieves a function pointer by name.
 
 # System Design
 
@@ -214,10 +216,10 @@ ftbl <- df_1d %>%
   ) %>%
   mutate(kernel=c("softmax"="Softmax","cross_entropy"="Cross-Entropy","rmsnorm"="RMSNorm")[kernel])
 
-cat("\\begin{table}[H]\n\\centering\n\\resizebox{\\columnwidth}{!}{")
+cat("\\begin{center}\n\\resizebox{\\columnwidth}{!}{")
 knitr::kable(ftbl, format="latex", booktabs=TRUE, col.names=c("Kernel","Peak auto-vec","Peak NEON","Auto-vec @ 4M","NEON @ 4M"),
              align=c("l","r","r","r","r")) %>% cat()
-cat("}\n\\caption{Fused kernel speedup over NumPy (Apple Silicon, float32). Peak speedup and sustained speedup at $N{=}4$M.}\n\\end{table}")
+cat("}\n\\captionof{table}{Fused kernel speedup over NumPy (Apple Silicon, float32). Peak speedup and sustained speedup at $N{=}4$M.}\n\\end{center}")
 ```
 
 \textbf{Baseline Kernels.}
@@ -282,28 +284,10 @@ The primary limitation is that for simple element-wise operations and dense line
 
 # Related Work
 
-Halide [ragan2013halide] pioneered algorithm/schedule separation for image processing. Exo builds on this idea but externalizes hardware knowledge to user-defined libraries. TVM [chen2018tvm] extends the Halide model with learning-based auto-tuning. JAX [jax] provides trace-based JIT via XLA. Numba [numba] JIT-compiles Python via llvmlite through type inference but does not provide scheduling transforms. Our work is complementary: a JIT backend for a scheduling language (Exo), using a Python-native compiler stack (xDSL and llvmlite).
+Halide \cite{ragan2013halide} pioneered algorithm/schedule separation for image processing. Exo builds on this idea but externalizes hardware knowledge to user-defined libraries. TVM \cite{chen2018tvm} extends the Halide model with learning-based auto-tuning. JAX \cite{jax} provides trace-based JIT via XLA. Numba \cite{numba} JIT-compiles Python via llvmlite through type inference but does not provide scheduling transforms. Our work is complementary: a JIT backend for a scheduling language (Exo), using a Python-native compiler stack (xDSL and llvmlite).
 
 # Conclusion
 
 We demonstrate that Exo kernels can be JIT-compiled to native ARM64 code through approximately 1,250 lines of Python, with no C compilation step. The key finding is that kernel fusion provides sustained speedups: softmax and cross-entropy maintain $4{-}6\times$ over NumPy even at $N{=}4$M, because fusing multiple passes into a single loop eliminates intermediate memory traffic. Simple element-wise kernels converge toward $1\times$ at large $N$ as expected, confirming that fusion is the essential mechanism for outperforming NumPy's array-at-a-time execution model. The pipeline runs entirely in-process and produces code competitive with LLVM's best auto-vectorization.
 
 \footnotesize
-\setlength{\parskip}{0.2ex}
-\setlength{\parindent}{0pt}
-
-# References {-}
-
-[ikarashi2022exo] Y. Ikarashi, G. L. Bernstein, A. Reinking, H. Genc, and J. Ragan-Kelley. Exo: Exocompilation for productive programming of hardware accelerators. In *PLDI*, 2022.
-
-[fehr2025xdsl] M. Fehr et al. xDSL: A common compiler ecosystem for languages that target dedicated accelerators. In *CGO*, 2025.
-
-[numba2015llvmlite] Numba Development Team. llvmlite: A lightweight LLVM Python binding. \url{https://github.com/numba/llvmlite}.
-
-[numba] S. K. Lam, A. Pitrou, and S. Seibert. Numba: A LLVM-based Python JIT compiler. In *LLVM-HPC Workshop*, 2015.
-
-[ragan2013halide] J. Ragan-Kelley et al. Halide: A language and compiler for optimizing parallelism, locality, and recomputation in image processing pipelines. In *PLDI*, 2013.
-
-[chen2018tvm] T. Chen et al. TVM: An automated end-to-end optimizing compiler for deep learning. In *OSDI*, 2018.
-
-[jax] J. Bradbury et al. JAX: Composable transformations of Python+NumPy programs. \url{https://github.com/jax-ml/jax}.
