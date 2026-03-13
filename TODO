@@ -2,7 +2,7 @@ comparing with numba would be important -> they specifically optimize numpy like
 
 apply patches to xdsl and exo
 
-lack  of completeness: look up clang intrinsics and do a 1:1 from source. doesn't need to be concise, but simple and complete.
+completeness: look up clang intrinsics and do a 1:1 from source. doesn't need to be concise, but simple and complete.
 
 ---
 
