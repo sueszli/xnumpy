@@ -15,7 +15,6 @@ def _matvec(y, W, x):
 
 
 def matvec_numba(M: int, N: int):
-    """Return a compiled matvec callable, warming up the JIT on first call."""
     dummy_W = np.zeros((M, N), dtype=np.float32)
     dummy_x = np.zeros(N, dtype=np.float32)
     dummy_y = np.zeros(M, dtype=np.float32)

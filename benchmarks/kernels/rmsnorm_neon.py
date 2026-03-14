@@ -24,7 +24,6 @@ def _jit_sumsq_neon(n: int) -> Callable[..., None]:
         zero_buf[2] = 0.0
         zero_buf[3] = 0.0
 
-        # 4 x 4-wide accumulators for ilp (16 floats/iter)
         acc0: f32[4] @ NEON
         acc1: f32[4] @ NEON
         acc2: f32[4] @ NEON
@@ -56,7 +55,6 @@ def _jit_sumsq_neon(n: int) -> Callable[..., None]:
             neon_add_acc_f32x4(acc2, sq2)
             neon_add_acc_f32x4(acc3, sq3)
 
-        # merge accumulators (tree reduction)
         neon_add_acc_f32x4(acc0, acc1)
         neon_add_acc_f32x4(acc2, acc3)
         neon_add_acc_f32x4(acc0, acc2)

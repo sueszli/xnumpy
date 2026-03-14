@@ -18,7 +18,6 @@ def cross_entropy_neon(n: int) -> Callable[..., None]:
 
     @proc
     def _sum_exp_neon(result: f32[1] @ DRAM, inp: f32[n] @ DRAM, mx: f32[1] @ DRAM):
-        # coefficients: [0]=inv32, [1]=c5, [2]=c4, [3]=c3, [4]=c2, [5]=c1, [6]=c0
         C: f32[7] @ DRAM
         C[0] = 0.03125
         C[1] = 0.008333333
@@ -53,7 +52,6 @@ def cross_entropy_neon(n: int) -> Callable[..., None]:
             y: f32[4] @ NEON
             neon_mul_f32x4(y, t, inv32_v)
 
-            # horner: ((((c5*y + c4)*y + c3)*y + c2)*y + c1)*y + c0
             h: f32[4] @ NEON
             neon_broadcast_f32x4(h, C[2:3])
             neon_fmadd_f32x4(h, c5_v, y)
@@ -71,7 +69,6 @@ def cross_entropy_neon(n: int) -> Callable[..., None]:
             neon_broadcast_f32x4(h, C[6:7])
             neon_fmadd_f32x4(h, g, y)
 
-            # square 5 times: e^32
             sq1: f32[4] @ NEON
             neon_square_f32x4(sq1, h)
             sq2: f32[4] @ NEON

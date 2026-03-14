@@ -60,13 +60,10 @@ def weighted_sum_neon(t: int, d: int) -> Callable[..., None]:
 
     @proc
     def _ws_neon(out: f32[d] @ DRAM, weights: f32[t] @ DRAM, V: f32[t, d] @ DRAM):
-        # out[j] = sum_t weights[t] * v[t, j]
-        # tile j by 4 (neon width), unroll t by 4 for ilp
         for j in seq(0, d):
             out[j] = 0.0
 
         for jo in seq(0, d4):
-            # 4 accumulators for ilp across t-unroll
             acc0: f32[4] @ NEON
             acc1: f32[4] @ NEON
             acc2: f32[4] @ NEON

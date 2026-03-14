@@ -1,6 +1,4 @@
-comparing with numba would be important -> they specifically optimize numpy like things
-
-apply patches to xdsl and exo
+move more patches to xdsl and exo
 
 completeness: look up clang intrinsics and do a 1:1 from source. doesn't need to be concise, but simple and complete.
 
@@ -22,4 +20,3 @@ choose kernels from:
 - https://karpathy.github.io/2026/02/12/microgpt/
 - https://gist.githubusercontent.com/karpathy/8627fe009c40f57531cb18360106ce95/raw/14fb038816c7aae0bb9342c2dbf1a51dd134a5ff/microgpt.py
 - note that numpy uses Apple Accelerate: https://developer.apple.com/documentation/accelerate/blas
-

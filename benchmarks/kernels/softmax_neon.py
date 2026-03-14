@@ -83,8 +83,6 @@ def softmax_neon(n: int) -> Callable[..., None]:
 
     @proc
     def _softmax_neon(out: f32[n] @ DRAM, inp: f32[n] @ DRAM, mx: f32[1] @ DRAM):
-        # all coefficients in one dram array (single malloc)
-        # [0]=inv32, [1]=c5, [2]=c4, [3]=c3, [4]=c2, [5]=c1, [6]=c0
         C: f32[7] @ DRAM
         C[0] = 0.03125
         C[1] = 0.008333333
@@ -119,7 +117,6 @@ def softmax_neon(n: int) -> Callable[..., None]:
         sum_v: f32[4] @ NEON
         neon_loadu_f32x4(sum_v, sum_buf[0:4])
 
-        # pass 1: exp(x - max) + accumulate sum
         for i in seq(0, n4):
             x: f32[4] @ NEON
             neon_loadu_f32x4(x, inp[4 * i : 4 * i + 4])
@@ -130,8 +127,6 @@ def softmax_neon(n: int) -> Callable[..., None]:
             y: f32[4] @ NEON
             neon_mul_f32x4(y, t, inv32_v)
 
-            # horner: ((((c5*y + c4)*y + c3)*y + c2)*y + c1)*y + c0
-            # use mul+add_acc instead of broadcast+fmadd to avoid dram loads
             h: f32[4] @ NEON
             neon_mul_f32x4(h, c5_v, y)
             neon_add_acc_f32x4(h, c4_v)
@@ -149,7 +144,6 @@ def softmax_neon(n: int) -> Callable[..., None]:
             neon_mul_f32x4(h, g, y)
             neon_add_acc_f32x4(h, c0_v)
 
-            # square 5 times: e^32
             sq1: f32[4] @ NEON
             neon_square_f32x4(sq1, h)
             sq2: f32[4] @ NEON
@@ -176,7 +170,6 @@ def softmax_neon(n: int) -> Callable[..., None]:
         inv_v: f32[4] @ NEON
         neon_broadcast_f32x4(inv_v, inv_s[0:1])
 
-        # pass 2: normalize
         for j in seq(0, n4):
             v: f32[4] @ NEON
             neon_loadu_f32x4(v, out[4 * j : 4 * j + 4])

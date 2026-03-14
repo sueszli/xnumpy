@@ -25,7 +25,6 @@ def _ce_sum_exp(sum_exp, x, mx):
 
 
 def cross_entropy_numba(n: int):
-    """Return (max_fn, sum_exp_fn) compiled callables, warming up the JIT."""
     dummy_x = np.zeros(n, dtype=np.float32)
     dummy_mx = np.zeros(1, dtype=np.float32)
     dummy_se = np.zeros(1, dtype=np.float32)

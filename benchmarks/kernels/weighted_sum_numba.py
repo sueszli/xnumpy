@@ -15,7 +15,6 @@ def _weighted_sum(out, weights, V):
 
 
 def weighted_sum_numba(T: int, D: int):
-    """Return a compiled weighted_sum callable, warming up the JIT on first call."""
     dummy_w = np.zeros(T, dtype=np.float32)
     dummy_V = np.zeros((T, D), dtype=np.float32)
     dummy_out = np.zeros(D, dtype=np.float32)

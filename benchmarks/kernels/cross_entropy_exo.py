@@ -10,7 +10,6 @@ from xnumpy.main import compile_jit
 from xnumpy.patches_exo import Stack
 
 
-# sum(exp(x_i - max)) kernel -- same exp approximation as softmax
 @proc
 def _sum_exp(N: size, result: f32[1], inp: f32[N], mx: f32[1]):
     sum_val: f32 @ Stack
@@ -56,7 +55,6 @@ def _jit_sum_exp(n: int) -> Callable[..., None]:
 
 @cache
 def cross_entropy_exo(n: int) -> tuple[Callable[..., None], Callable[..., None]]:
-    # reuse max kernels from softmax
     from kernels.softmax_exo import _jit_max, _jit_max_neon
 
     max_fn = _jit_max_neon(n) if n % 8 == 0 else _jit_max(n)

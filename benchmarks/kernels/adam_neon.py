@@ -134,7 +134,6 @@ def adam_neon(n: int) -> Callable[..., None]:
 
     @proc
     def _adam_neon(param: f32[n] @ DRAM, grad: f32[n] @ DRAM, m: f32[n] @ DRAM, v: f32[n] @ DRAM, b1: f32[1] @ DRAM, b2: f32[1] @ DRAM, eps: f32[1] @ DRAM, lr: f32[1] @ DRAM, beta1_t: f32[1] @ DRAM, beta2_t: f32[1] @ DRAM):
-        # scalars
         one: f32[1] @ DRAM
         one[0] = 1.0
 
@@ -152,7 +151,6 @@ def adam_neon(n: int) -> Callable[..., None]:
         neon_broadcast_f32x4(eps_v, eps[0:1])
         neon_broadcast_f32x4(lr_v, lr[0:1])
 
-        # inv_beta1_t = 1.0 / beta1_t
         ib1t: f32[1] @ DRAM
         ib1t[0] = one[0] / beta1_t[0]
         neon_broadcast_f32x4(inv_beta1_t_v, ib1t[0:1])

@@ -11,7 +11,6 @@ def _relu(out, x):
 
 
 def relu_numba(n: int):
-    """Return a compiled relu callable, warming up the JIT on first call."""
     dummy_x = np.zeros(n, dtype=np.float32)
     dummy_out = np.zeros(n, dtype=np.float32)
     _relu(dummy_out, dummy_x)

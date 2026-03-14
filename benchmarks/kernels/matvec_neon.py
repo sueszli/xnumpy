@@ -60,13 +60,10 @@ def matvec_neon(m: int, k: int) -> Callable[..., None]:
 
     @proc
     def _mv_neon(y: f32[m] @ DRAM, WT: f32[k, m] @ DRAM, x: f32[k] @ DRAM):
-        # wt[i, j] = w[j, i] (transposed for contiguous neon access)
-        # y[j] = sum_i wt[i, j] * x[i]
         for j in seq(0, m):
             y[j] = 0.0
 
         for jo in seq(0, m4):
-            # 4 accumulators for ilp across k-unroll
             acc0: f32[4] @ NEON
             acc1: f32[4] @ NEON
             acc2: f32[4] @ NEON

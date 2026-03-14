@@ -11,8 +11,6 @@ from xnumpy.main import compile_jit
 
 @proc
 def _weighted_sum(T: size, D: size, out: f32[D] @ DRAM, weights: f32[T] @ DRAM, V: f32[T, D] @ DRAM):
-    # out[j] = sum_t weights[t] * v[t, j]
-    # j-inner loop is vectorizable: v[t,j] contiguous in j, weights[t] broadcast
     for j in seq(0, D):
         out[j] = 0.0
     for t in seq(0, T):

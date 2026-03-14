@@ -24,8 +24,6 @@ def dot_neon(n: int) -> Callable[..., None]:
         zero_buf[2] = 0.0
         zero_buf[3] = 0.0
 
-        # 4 x 4-wide accumulators for ilp (16 floats/iter)
-        # m-series fma: 4-cycle latency, 2 pipes -> 4 accs hides latency
         acc0: f32[4] @ NEON
         acc1: f32[4] @ NEON
         acc2: f32[4] @ NEON
@@ -57,7 +55,6 @@ def dot_neon(n: int) -> Callable[..., None]:
             neon_fmadd_f32x4(acc2, q2, k2)
             neon_fmadd_f32x4(acc3, q3, k3)
 
-        # merge accumulators (tree reduction)
         neon_add_acc_f32x4(acc0, acc1)
         neon_add_acc_f32x4(acc2, acc3)
         neon_add_acc_f32x4(acc0, acc2)

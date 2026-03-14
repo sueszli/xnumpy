@@ -17,7 +17,6 @@ def _matmul(C, A, B):
 
 
 def matmul_numba(M: int, K: int, N: int):
-    """Return a compiled matmul callable, warming up the JIT on first call."""
     dummy_A = np.zeros((M, K), dtype=np.float32)
     dummy_B = np.zeros((K, N), dtype=np.float32)
     dummy_C = np.zeros((M, N), dtype=np.float32)

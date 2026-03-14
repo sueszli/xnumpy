@@ -12,7 +12,6 @@ def _saxpy(y, x, a):
 
 
 def saxpy_numba(n: int):
-    """Return a compiled saxpy callable, warming up the JIT on first call."""
     dummy_y = np.zeros(n, dtype=np.float32)
     dummy_x = np.zeros(n, dtype=np.float32)
     dummy_a = np.array([1.0], dtype=np.float32)

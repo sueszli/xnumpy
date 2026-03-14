@@ -11,7 +11,6 @@ from xnumpy.main import compile_jit
 
 @proc
 def _matmul(M: size, K: size, N: size, C: f32[M, N] @ DRAM, A: f32[M, K] @ DRAM, B: f32[K, N] @ DRAM):
-    # c[i,j] = sum_k a[i,k]*b[k,j]
     for i in seq(0, M):
         for j in seq(0, N):
             C[i, j] = 0.0
@@ -22,11 +21,8 @@ def _matmul(M: size, K: size, N: size, C: f32[M, N] @ DRAM, A: f32[M, K] @ DRAM,
 @cache
 def matmul_exo(m: int, k: int, n: int) -> Callable[..., None]:
     p = _matmul.partial_eval(M=m, K=k, N=n)
-    # fission: hoist the zero-init out of the j,k loops so k can be reordered
     p = fission(p, p.find("for k in _: _").before(), n_lifts=2)
-    # reorder j,k -> k,j: i-k-j loop order for contiguous b access and llvm auto-vectorization of j
     p = reorder_loops(p, "j k")
-    # tile k and j for l1 cache locality (64x64 b-tiles = 16kb, fits in l1)
     do_k = k > 64
     do_j = n > 64
     if do_k:

@@ -11,7 +11,6 @@ def _embedding(out, row):
 
 
 def embedding_numba(d: int):
-    """Return a compiled embedding callable, warming up the JIT on first call."""
     dummy_out = np.zeros(d, dtype=np.float32)
     dummy_row = np.zeros(d, dtype=np.float32)
     _embedding(dummy_out, dummy_row)

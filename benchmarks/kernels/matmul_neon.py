@@ -66,12 +66,10 @@ def matmul_neon(m: int, k: int, n: int) -> Callable[..., None]:
                 C[i, 4 * jo + 2] = 0.0
                 C[i, 4 * jo + 3] = 0.0
 
-        # 4-row register-blocked, k-tiled, j-tiled matmul
         for ko in seq(0, n_k_tiles):
             for jo in seq(0, n_j_tiles):
                 for io in seq(0, m4):
                     for ji in seq(0, bj4):
-                        # 4 row accumulators in neon registers
                         c0: f32[4] @ NEON
                         c1: f32[4] @ NEON
                         c2: f32[4] @ NEON
@@ -81,7 +79,6 @@ def matmul_neon(m: int, k: int, n: int) -> Callable[..., None]:
                         neon_loadu_f32x4(c2, C[4 * io + 2, bj * jo + 4 * ji : bj * jo + 4 * ji + 4])
                         neon_loadu_f32x4(c3, C[4 * io + 3, bj * jo + 4 * ji : bj * jo + 4 * ji + 4])
                         for ki in seq(0, bk):
-                            # load b row once, reuse across 4 i-rows
                             b_vec: f32[4] @ NEON
                             neon_loadu_f32x4(b_vec, B[bk * ko + ki, bj * jo + 4 * ji : bj * jo + 4 * ji + 4])
                             a0: f32[4] @ NEON

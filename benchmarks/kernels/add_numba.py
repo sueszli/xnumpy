@@ -11,7 +11,6 @@ def _add(z, x, y):
 
 
 def add_numba(n: int):
-    """Return a compiled add callable, warming up the JIT on first call."""
     dummy_x = np.zeros(n, dtype=np.float32)
     dummy_y = np.zeros(n, dtype=np.float32)
     dummy_z = np.zeros(n, dtype=np.float32)

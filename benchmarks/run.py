@@ -75,10 +75,6 @@ def _gflops(flops: int, t: float, precision: int = 2) -> float:
 
 
 def run_kernel(name: str, sizes: list, bench_one, precision: int = 2) -> None:
-    """Drive the benchmark loop for one kernel.
-
-    bench_one(size) returns (n_label, flops, t_np, t_exo, t_neon, t_numba).
-    """
     for size in tqdm(sizes, desc=name):
         n_label, flops, t_np, t_exo, t_neon, t_numba = bench_one(size)
         rows.append(
@@ -91,11 +87,6 @@ def run_kernel(name: str, sizes: list, bench_one, precision: int = 2) -> None:
                 "numba_gflops": _gflops(flops, t_numba, precision),
             }
         )
-
-
-#
-# matmul
-#
 
 
 def bench_matmul(n):
@@ -132,15 +123,10 @@ def bench_matmul(n):
 run_kernel("matmul", [1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 8], bench_matmul, precision=1)
 
 
-#
-# matvec (linear projection) y[j] = sum_i w[j][i] * x[i]
-#
-
-
 def bench_matvec(n):
     W = np.random.randn(n, n).astype(np.float32)
     x = np.random.randn(n).astype(np.float32)
-    flops = 2 * n**2  # n muls + n adds per output, n outputs
+    flops = 2 * n**2
 
     fn_np = matvec_numpy(n, n)
     expected = np.empty(n, dtype=np.float32)
@@ -153,7 +139,6 @@ def bench_matvec(n):
     assert np.allclose(y_exo, expected, atol=1e-3), f"matvec exo wrong: max_diff={np.max(np.abs(y_exo - expected))}"
     t_exo = bench(lambda fn=fn_exo, y=y_exo, W=W, x=x: fn(y, W, x))
 
-    # uses transposed w for contiguous neon access
     WT = np.ascontiguousarray(W.T)
     fn_neon = matvec_neon(n, n)
     y_neon = np.zeros(n, dtype=np.float32)
@@ -173,18 +158,13 @@ def bench_matvec(n):
 run_kernel("matvec", [1 << 5, 1 << 7, 1 << 9, 1 << 11], bench_matvec, precision=1)
 
 
-#
-# saxpy (y += a*x)
-#
-
-
 def bench_saxpy(n):
     x = np.random.randn(n).astype(np.float32)
     y_orig = np.random.randn(n).astype(np.float32)
     a_val = np.float32(2.5)
     a_arr = np.array([a_val], dtype=np.float32)
     expected = y_orig + a_val * x
-    flops = 2 * n  # n multiplies + n adds
+    flops = 2 * n
 
     fn_np = saxpy_numpy(n)
     t_np = bench(lambda fn=fn_np, y=y_orig.copy(), x=x, a=a_arr: fn(y, x, a))
@@ -213,21 +193,15 @@ def bench_saxpy(n):
 run_kernel("saxpy", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_saxpy)
 
 
-#
-# softmax (fused: exp(x-max) + sum + normalize)
-#
-
-
 def bench_softmax(n):
     inp = np.random.randn(n).astype(np.float32)
-    flops = 4 * n  # sub + exp + sum + div (4 ops per element, standard counting)
+    flops = 4 * n
 
     fn_np = softmax_numpy(n)
     expected = np.empty(n, dtype=np.float32)
     fn_np(expected, inp)
     t_np = bench(lambda fn=fn_np, out=expected, x=inp: fn(out, x))
 
-    # exo auto-vectorized (jit max + fused exp/sum/normalize)
     fn_max, fn_core = softmax_exo(n)
     out_exo = np.zeros(n, dtype=np.float32)
     mx = np.array([0.0], dtype=np.float32)
@@ -241,7 +215,6 @@ def bench_softmax(n):
 
     t_exo = bench(_bench_exo)
 
-    # exo neon intrinsics (neon max + fused exp/sum/normalize with explicit neon)
     fn_neon = softmax_neon(n)
     fn_max_neon = _jit_max_neon(n)
     out_neon = np.zeros(n, dtype=np.float32)
@@ -255,7 +228,6 @@ def bench_softmax(n):
 
     t_neon = bench(_bench_neon)
 
-    # numba jit
     fn_numba = softmax_numba(n)
     out_numba = np.zeros(n, dtype=np.float32)
     fn_numba(out_numba, inp)
@@ -268,14 +240,9 @@ def bench_softmax(n):
 run_kernel("softmax", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_softmax)
 
 
-#
-# relu (y = max(0, x))
-#
-
-
 def bench_relu(n):
     inp = np.random.randn(n).astype(np.float32)
-    flops = n  # 1 comparison per element
+    flops = n
 
     fn_np = relu_numpy(n)
     expected = np.empty(n, dtype=np.float32)
@@ -306,15 +273,10 @@ def bench_relu(n):
 run_kernel("relu", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_relu)
 
 
-#
-# add (z = x + y)
-#
-
-
 def bench_add(n):
     x = np.random.randn(n).astype(np.float32)
     y = np.random.randn(n).astype(np.float32)
-    flops = n  # 1 add per element
+    flops = n
 
     fn_np = add_numpy(n)
     expected = np.empty(n, dtype=np.float32)
@@ -345,16 +307,10 @@ def bench_add(n):
 run_kernel("add", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_add)
 
 
-#
-# cross-entropy loss: loss = -log(softmax(logits)[target])
-# numerically stable: loss = -logits[target] + max + log(sum(exp(logits - max)))
-#
-
-
 def bench_cross_entropy(n):
     logits = np.random.randn(n).astype(np.float32)
     target = np.random.randint(0, n)
-    flops = 4 * n  # max + sub + exp + sum
+    flops = 4 * n
 
     fn_max_np, fn_sum_exp_np = cross_entropy_numpy(n)
     mx_np = np.array([0.0], dtype=np.float32)
@@ -370,7 +326,6 @@ def bench_cross_entropy(n):
 
     t_np = bench(_bench_np)
 
-    # exo auto-vectorized
     fn_max, fn_sum_exp = cross_entropy_exo(n)
     mx = np.array([0.0], dtype=np.float32)
     sum_exp = np.array([0.0], dtype=np.float32)
@@ -386,7 +341,6 @@ def bench_cross_entropy(n):
 
     t_exo = bench(_bench_exo)
 
-    # exo neon intrinsics
     fn_max_neon = _jit_max_neon(n)
     fn_sum_exp_neon = cross_entropy_neon(n)
     fn_max_neon(mx, logits)
@@ -401,7 +355,6 @@ def bench_cross_entropy(n):
 
     t_neon = bench(_bench_neon)
 
-    # numba jit
     fn_max_numba, fn_sum_exp_numba = cross_entropy_numba(n)
     fn_max_numba(mx, logits)
     fn_sum_exp_numba(sum_exp, logits, mx)
@@ -421,18 +374,13 @@ def bench_cross_entropy(n):
 run_kernel("cross_entropy", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_cross_entropy)
 
 
-#
-# rmsnorm: y[i] = x[i] * rsqrt(mean(x^2) + eps)
-#
-
-
 EPS = np.float32(1e-5)
 
 
 def bench_rmsnorm(n):
     inp = np.random.randn(n).astype(np.float32)
     expected = inp / np.sqrt(np.mean(inp**2) + EPS)
-    flops = 3 * n  # n squares + n sum-adds + n scale-muls
+    flops = 3 * n
 
     fn_sumsq_np, fn_scale_np = rmsnorm_numpy(n)
     sumsq_np = np.array([0.0], dtype=np.float32)
@@ -448,7 +396,6 @@ def bench_rmsnorm(n):
     assert np.allclose(out_np, expected, atol=1e-3), "rmsnorm numpy wrong"
     t_np = bench(_run_np)
 
-    # exo auto-vectorized (sumsq kernel + python sqrt + scale kernel)
     fn_sumsq, fn_scale = rmsnorm_exo(n)
     sumsq = np.array([0.0], dtype=np.float32)
     scale_arr = np.array([0.0], dtype=np.float32)
@@ -463,7 +410,6 @@ def bench_rmsnorm(n):
     assert np.allclose(out_exo, expected, atol=1e-3), f"rmsnorm exo wrong: max_diff={np.max(np.abs(out_exo - expected))}"
     t_exo = bench(_run_exo)
 
-    # exo neon intrinsics
     fn_sumsq_neon, fn_scale_neon = rmsnorm_neon(n)
     out_neon = np.empty(n, dtype=np.float32)
 
@@ -476,7 +422,6 @@ def bench_rmsnorm(n):
     assert np.allclose(out_neon, expected, atol=1e-3), f"rmsnorm neon wrong: max_diff={np.max(np.abs(out_neon - expected))}"
     t_neon = bench(_run_neon)
 
-    # numba jit
     fn_sumsq_numba, fn_scale_numba = rmsnorm_numba(n)
     out_numba = np.empty(n, dtype=np.float32)
 
@@ -495,18 +440,13 @@ def bench_rmsnorm(n):
 run_kernel("rmsnorm", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_rmsnorm)
 
 
-#
-# embedding lookup: y[i] = table[index][i]
-#
-
-
-VOCAB_SIZE = 16  # only one row is accessed; small vocab keeps memory reasonable at large d
+VOCAB_SIZE = 16
 
 
 def bench_embedding(d):
     table = np.random.randn(VOCAB_SIZE, d).astype(np.float32)
     index = np.random.randint(0, VOCAB_SIZE)
-    ops = d  # 1 load+store per element
+    ops = d
 
     fn_np = embedding_numpy(d)
     expected = np.empty(d, dtype=np.float32)
@@ -537,16 +477,11 @@ def bench_embedding(d):
 run_kernel("embedding", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_embedding)
 
 
-#
-# scaled dot product: score = sum(q[j] * k[j]) / sqrt(d)
-#
-
-
 def bench_dot(n):
     q = np.random.randn(n).astype(np.float32)
     k = np.random.randn(n).astype(np.float32)
     inv_sqrt_d = np.float32(1.0 / np.sqrt(n))
-    flops = 2 * n  # n multiplies + n adds
+    flops = 2 * n
 
     fn_np = dot_numpy(n)
     result_np = np.array([0.0], dtype=np.float32)
@@ -581,16 +516,11 @@ def bench_dot(n):
 run_kernel("dot", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_dot)
 
 
-#
-# weighted sum (attention output): out[j] = sum_t weights[t] * v[t][j]
-#
-
-
 def bench_weighted_sum(size):
     t_size, d_size = size
     weights = np.random.randn(t_size).astype(np.float32)
     V = np.random.randn(t_size, d_size).astype(np.float32)
-    flops = 2 * t_size * d_size  # t*d muls + t*d adds
+    flops = 2 * t_size * d_size
 
     fn_np = weighted_sum_numpy(t_size, d_size)
     expected = np.empty(d_size, dtype=np.float32)
@@ -621,16 +551,11 @@ def bench_weighted_sum(size):
 run_kernel("weighted_sum", [(32, 64), (64, 128), (128, 256), (256, 512)], bench_weighted_sum)
 
 
-#
-# adam optimizer: param -= lr * m_hat / (sqrt(v_hat) + eps)
-#
-
-
 B1 = np.float32(0.9)
 B2 = np.float32(0.999)
 ADAM_EPS = np.float32(1e-8)
 LR = np.float32(0.001)
-STEP = 10  # simulate step 10 so beta1_t, beta2_t are non-trivial
+STEP = 10
 
 b1_arr = np.array([B1], dtype=np.float32)
 b2_arr = np.array([B2], dtype=np.float32)
@@ -645,11 +570,10 @@ def bench_adam(n):
     grad = np.random.randn(n).astype(np.float32)
     m_orig = np.random.randn(n).astype(np.float32) * 0.1
     v_orig = np.abs(np.random.randn(n).astype(np.float32)) * 0.01
-    flops = 10 * n  # mul/add/div/sqrt per element
+    flops = 10 * n
 
     fn_np = adam_numpy(n)
 
-    # compute expected
     p_exp = param_orig.copy()
     m_exp = m_orig.copy()
     v_exp = v_orig.copy()
@@ -691,7 +615,6 @@ run_kernel("adam", [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20], bench_adam)
 def _plot(df: pl.DataFrame) -> None:
     long = df.unpivot(on=["exo_speedup", "neon_speedup", "numba_speedup"], index=["kernel", "n"], variable_name="variant", value_name="speedup").with_columns(pl.col("variant").replace({"exo_speedup": "Auto-vectorized", "neon_speedup": "NEON intrinsics", "numba_speedup": "Numba JIT"}))
 
-    # sort kernels by max speedup at their largest input size (descending)
     last_n = df.group_by("kernel").agg(pl.col("n").last().alias("last_n"))
     best = df.join(last_n, on="kernel").filter(pl.col("n") == pl.col("last_n")).with_columns(pl.max_horizontal("exo_speedup", "neon_speedup", "numba_speedup").alias("best")).sort("best", descending=True)
     kernel_order = best["kernel"].to_list()
@@ -723,7 +646,7 @@ def _plot(df: pl.DataFrame) -> None:
         + theme_minimal()
         + theme(
             figure_size=(8, 5 * n_kernels),
-            panel_spacing_y=0.15,  # default is 0.01, this is the fraction of panel height used as gap
+            panel_spacing_y=0.15,
             legend_position="top",
             legend_title=element_text(size=0),
             legend_text=element_text(size=13),

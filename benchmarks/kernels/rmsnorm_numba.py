@@ -20,7 +20,6 @@ def _rmsnorm_scale(out, x, scale):
 
 
 def rmsnorm_numba(n: int):
-    """Return (sumsq_fn, scale_fn) compiled callables, warming up the JIT."""
     dummy_x = np.zeros(n, dtype=np.float32)
     dummy_sq = np.zeros(1, dtype=np.float32)
     dummy_sc = np.zeros(1, dtype=np.float32)

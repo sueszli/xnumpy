@@ -13,7 +13,6 @@ def _dot(result, q, k):
 
 
 def dot_numba(n: int):
-    """Return a compiled dot callable, warming up the JIT on first call."""
     dummy_q = np.zeros(n, dtype=np.float32)
     dummy_k = np.zeros(n, dtype=np.float32)
     dummy_r = np.zeros(1, dtype=np.float32)

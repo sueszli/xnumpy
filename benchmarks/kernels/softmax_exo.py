@@ -27,7 +27,6 @@ def _jit_max_neon(n: int) -> Callable[..., None]:
 
     @proc
     def _find_max_neon(result: f32[1] @ DRAM, inp: f32[n] @ DRAM):
-        # 2x4-wide accumulators for ilp (8 floats/iter)
         acc0: f32[4] @ NEON
         acc1: f32[4] @ NEON
         neon_loadu_f32x4(acc0, inp[0:4])
@@ -56,7 +55,6 @@ def _jit_max_neon(n: int) -> Callable[..., None]:
     return compile_jit(p)[name]
 
 
-# scalar max-reduction fallback
 @proc
 def _find_max(N: size, result: f32[1], inp: f32[N]):
     acc: f32 @ Stack
@@ -74,11 +72,8 @@ def _jit_max(n: int) -> Callable[..., None]:
     return compile_jit(rename(p, name))[name]
 
 
-# fused exp(x-max) + sum + normalize kernel
 @proc
 def _softmax_core(N: size, out: f32[N], inp: f32[N], mx: f32[1]):
-    # exp(x) = exp(x/32)^32, degree-5 taylor for exp(x/32)
-    # all temporaries on stack (alloca) for register promotion
     sum_val: f32 @ Stack
     t: f32 @ Stack
     y: f32 @ Stack
@@ -124,6 +119,5 @@ def _jit_core(n: int) -> Callable[..., None]:
 
 @cache
 def softmax_exo(n: int) -> tuple[Callable[..., None], Callable[..., None]]:
-    # returns (find_max_fn, softmax_core_fn) pair
     max_fn = _jit_max_neon(n) if n % 4 == 0 else _jit_max(n)
     return max_fn, _jit_core(n)

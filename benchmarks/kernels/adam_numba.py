@@ -29,7 +29,6 @@ def _adam(param, grad, m, v, b1, b2, eps, lr, beta1_t, beta2_t):
 
 
 def adam_numba(n: int):
-    """Return a compiled adam callable, warming up the JIT on first call."""
     dummy_param = np.zeros(n, dtype=np.float32)
     dummy_grad = np.zeros(n, dtype=np.float32)
     dummy_m = np.zeros(n, dtype=np.float32)
