@@ -1,0 +1,46 @@
+Abstract
+========
+
+Following the six-sentence structure from Easterbrook (2010):
+  http://www.easterbrook.ca/steve/2010/01/how-to-write-a-scientific-abstract-in-six-easy-steps/
+
+Topic:
+  Python numerical computing relies on opaque BLAS libraries, but custom fused
+  kernels (softmax, RMSNorm, attention) lack optimized implementations.
+
+Problem:
+  Can developers write custom fused kernels at hand-tuned SIMD performance
+  without leaving Python?
+
+Gap:
+  NumPy can't fuse operations; Numba lacks explicit hardware control; Exo
+  provides scheduling control but emits C requiring offline compilation.
+
+Approach:
+  xnumpy JIT-compiles Exo's scheduling DSL to native code via xDSL/LLVM MCJIT
+  with explicit SIMD intrinsics and ~1us vectorcall dispatch.
+
+Methods:
+  13 kernel families (matmul, softmax, RMSNorm, Adam, cross-entropy, ...) in
+  auto-vectorized and NEON variants, benchmarked against NumPy/Accelerate on
+  Apple Silicon.
+
+Impact:
+  Up to 11.7x speedup over NumPy on fused kernels, showing scheduling DSLs +
+  modern compiler infra can match hand-tuned SIMD for custom ML kernels.
+
+
+Combined
+--------
+
+Python numerical computing relies on opaque BLAS libraries, but custom fused
+kernels (softmax, RMSNorm, attention) lack optimized implementations. Existing
+tools force a tradeoff: NumPy can't fuse operations, Numba lacks hardware
+control, and Exo emits C requiring offline compilation. We present xnumpy, a JIT
+compiler that lowers Exo's scheduling DSL to native code via xDSL/LLVM MCJIT
+with explicit SIMD intrinsics and ~1us dispatch. We implemented 13 kernel
+families in auto-vectorized and ARM NEON variants, benchmarked against NumPy
+(Apple Accelerate) on Apple Silicon. Fused kernels like softmax achieve up to
+11.7x speedup over NumPy, showing that scheduling DSLs combined with modern
+compiler infrastructure can match hand-tuned SIMD performance for custom ML
+inference kernels.
