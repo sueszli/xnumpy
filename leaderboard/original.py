@@ -104,7 +104,7 @@ class Value:
 
 
 #
-# weights
+# training
 #
 
 
@@ -224,7 +224,12 @@ for step in range(num_steps):
 
     print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end="\r")
 
-# Inference: may the model babble back to us
+
+# 
+# inference
+# 
+
+
 temperature = 0.5  # in (0, 1], control the "creativity" of generated text, low to high
 print("\n--- inference (new, hallucinated names) ---")
 for sample_idx in range(20):
@@ -239,3 +244,4 @@ for sample_idx in range(20):
             break
         sample.append(uchars[token_id])
     print(f"sample {sample_idx+1:2d}: {''.join(sample)}")
+    
