@@ -1,12 +1,3 @@
-▄   ▄  ▄ ▄▄   ▄   ▄  ▄▄▄▄▄  ▄▄▄▄   ▄   ▄ 
- █▄█   █▀  █  █   █  █ █ █  █▀ ▀█  ▀▄ ▄▀ 
- ▄█▄   █   █  █   █  █ █ █  █   █   █▄█  
-▄▀ ▀▄  █   █  ▀▄▄▀█  █ █ █  ██▄█▀   ▀█   
-                            █       ▄▀   
-
-Vectorized scientific compute for everyone.
-
-
               \
                \
                 \\
@@ -31,39 +22,27 @@ Vectorized scientific compute for everyone.
                      <.'_.''
                        <'
 
+a just in time compiler for the exo language.
 
-exojit allows writing user-scheduled SIMD kernels in pure Python.
-It lowers Exo scheduling-language kernels through xDSL (Python-
-native MLIR) and JIT-compiles them to native vector code via
-llvmlite's MCJIT entirely in-process, without a C compilation step.
+learn about exo: https://github.com/exo-lang/exo/blob/main/docs/README.md
 
-The programmer writes a kernel, applies scheduling transforms
-(e.g. tiling, vectorization, unrolling), and obtains a callable
-native function pointer.
-
-How it works:
-
-      Exo Python source
-          v
-      Exo LoopIR
-          v
-    - - - - - - - - - - - - - - - - -  xDSL
-      MLIR module
-          v
-      MLIR LLVM dialect
-          v
-    - - - - - - - - - - - - - - - - - llvmlite
-      Native code
-
-Write your own kernels:
+usage:
 
     $ uv run exojit examples/demo.py --mlir
     $ uv run exojit examples/demo.py --asm
     $ uv run exojit examples/demo.py --c
     $ uv run python examples/demo.py # jit
 
-References:
+how it works:
 
-- https://github.com/xdslproject/xdsl/blob/main/README.md
-- https://github.com/exo-lang/exo/blob/main/docs/README.md
-- https://github.com/kaylendog/exo-mlir
+      Exo Python source
+          v
+      Exo LoopIR
+          v
+    - - - - - - - - - - - - - xDSL
+      MLIR module
+          v
+      MLIR LLVM dialect
+          v
+    - - - - - - - - - - - - - llvmlite MCJIT
+      Native code
