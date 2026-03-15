@@ -222,7 +222,7 @@ def gpt(token_id: int, pos_id: int, keys: list[list[list[Value]]], values: list[
     return logits
 
 
-# adam optimizer value
+# adam optimizer values
 learning_rate = 0.01
 beta1 = 0.85
 beta2 = 0.99
