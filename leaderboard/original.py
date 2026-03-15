@@ -238,7 +238,7 @@ for step in range(num_steps):
     tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
     n = min(block_size, len(tokens) - 1)
 
-    # Forward the token sequence through the model, building up the computation graph all the way to the loss
+    # forward
     keys: list[list[list[Value]]] = [[] for _ in range(n_layer)]
     values: list[list[list[Value]]] = [[] for _ in range(n_layer)]
     losses = []
@@ -250,10 +250,10 @@ for step in range(num_steps):
         losses.append(loss_t)
     loss = (1 / n) * sum(losses)  # final average loss over the document sequence. May yours be low.
 
-    # Backward the loss, calculating the gradients with respect to all model parameters
+    # backward loss
     loss.backward()
 
-    # Adam optimizer update: update the model parameters based on the corresponding gradients
+    # adam optimizer update
     lr_t = learning_rate * (1 - step / num_steps)  # linear learning rate decay
     for i, p in enumerate(params):
         m[i] = beta1 * m[i] + (1 - beta1) * p.grad
@@ -271,7 +271,7 @@ for step in range(num_steps):
 #
 
 
-temperature = 0.5  # in (0, 1], control the "creativity" of generated text, low to high
+temperature = 0.5
 print("\ninference:")
 for sample_idx in range(20):
     keys: list[list[list[Value]]] = [[] for _ in range(n_layer)]
