@@ -829,6 +829,8 @@ def _plot(df: pl.DataFrame) -> None:
             seen.append(v)
     pdf["n"] = pd.Categorical(pdf["n"], categories=seen, ordered=True)
     pdf["kernel"] = pd.Categorical(pdf["kernel"], categories=kernel_order, ordered=True)
+    variant_order = ["Auto-vectorized", "NEON intrinsics", "Numba JIT", "JAX JIT", "torch.compile"]
+    pdf["variant"] = pd.Categorical(pdf["variant"], categories=variant_order, ordered=True)
 
     out = Path(__file__).parent / "plots"
     out.mkdir(exist_ok=True)
@@ -841,9 +843,9 @@ def _plot(df: pl.DataFrame) -> None:
         + geom_line(size=1.4)
         + geom_point(aes(shape="variant"), size=2.8)
         + facet_wrap("~kernel", scales="free", ncol=1)
-        + scale_color_manual(values=["#4C72B0", "#DD8452", "#C44E52", "#55A868", "#8172B3"])
-        + scale_linetype_manual(values=["solid", "dotted", "solid", "dotted", "dotted"])
-        + scale_shape_manual(values=["o", "^", "D", "s", "v"])
+        + scale_color_manual(values=["#4C72B0", "#C44E52", "#55A868", "#DD8452", "#8172B3"])
+        + scale_linetype_manual(values=["solid", "solid", "dotted", "dotted", "dotted"])
+        + scale_shape_manual(values=["o", "D", "s", "^", "v"])
         + expand_limits(y=1)
         + theme_minimal()
         + theme(
