@@ -9,21 +9,34 @@ from pathlib import Path
 
 random.seed(42)
 
+#
 # load data
+#
+
+
 docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
 random.shuffle(docs)
 print(f"num docs: {len(docs)}")
 
+
+#
 # tokenizer
+#
+
+
 uchars = sorted(set("".join(docs)))  # unique characters
 BOS = len(uchars)  # special beginning of sequence (BOS) token
 vocab_size = len(uchars) + 1  # +1 is for BOS
 print(f"vocab size: {vocab_size}")
 
 
+#
 # autograd
+#
+
+
 class Value:
-    __slots__ = ("data", "grad", "_children", "_local_grads")  # Python optimization for memory usage
+    __slots__ = ("data", "grad", "_children", "_local_grads")  # perf optimization
 
     def __init__(self, data, children=(), local_grads=()):
         self.data = data  # scalar value of this node calculated during forward pass
@@ -90,7 +103,11 @@ class Value:
                 child.grad += local_grad * v.grad
 
 
-# Initialize the parameters, to store the knowledge of the model
+#
+# weights
+#
+
+
 n_layer = 1  # depth of the transformer neural network (number of layers)
 n_embd = 16  # width of the network (embedding dimension)
 block_size = 16  # maximum context length of the attention window (note: the longest name is 15 characters)
