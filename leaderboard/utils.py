@@ -10,10 +10,6 @@ import json
 import math
 from pathlib import Path
 
-from termgraph.args import Args
-from termgraph.chart import BarChart
-from termgraph.data import Data
-
 WEIGHTS_PATH = Path(__file__).parent / "weights.json"
 
 
@@ -67,6 +63,10 @@ def print_times(path: Path) -> None:
 
 
 def print_times_all() -> None:
+    from termgraph.args import Args
+    from termgraph.chart import BarChart
+    from termgraph.data import Data
+
     times_dir = Path(__file__).parent / "times"
     if not times_dir.exists():
         return
