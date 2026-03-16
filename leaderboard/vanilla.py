@@ -2,14 +2,9 @@ import math
 import random
 from pathlib import Path
 
+from utils import assert_weights_match
+
 random.seed(42)
-
-
-docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
-random.shuffle(docs)
-uchars = sorted(set("".join(docs)))
-BOS = len(uchars)
-vocab_size = len(uchars) + 1
 
 
 class Value:
@@ -85,24 +80,6 @@ class Value:
 #
 
 
-n_layer = 1
-n_embd = 16
-block_size = 16
-n_head = 4
-head_dim = n_embd // n_head
-matrix = lambda nout, nin, std=0.08: [[Value(random.gauss(0, std)) for _ in range(nin)] for _ in range(nout)]
-state_dict = {"wte": matrix(vocab_size, n_embd), "wpe": matrix(block_size, n_embd), "lm_head": matrix(vocab_size, n_embd)}
-for i in range(n_layer):
-    state_dict[f"layer{i}.attn_wq"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wk"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wv"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wo"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.mlp_fc1"] = matrix(4 * n_embd, n_embd)
-    state_dict[f"layer{i}.mlp_fc2"] = matrix(n_embd, 4 * n_embd)
-params = [p for mat in state_dict.values() for row in mat for p in row]
-print(f"num params: {len(params)}")
-
-
 def linear(x, w):
     return [sum(wi * xi for wi, xi in zip(wo, x)) for wo in w]
 
@@ -120,7 +97,7 @@ def rmsnorm(x):
     return [xi * scale for xi in x]
 
 
-def gpt(token_id, pos_id, keys, values):
+def gpt(token_id, pos_id, keys, values, state_dict, n_layer, n_head, head_dim):
     tok_emb = state_dict["wte"][token_id]
     pos_emb = state_dict["wpe"][pos_id]
     x = [t + p for t, p in zip(tok_emb, pos_emb)]
@@ -158,6 +135,31 @@ def gpt(token_id, pos_id, keys, values):
     return logits
 
 
+docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
+random.shuffle(docs)
+uchars = sorted(set("".join(docs)))
+BOS = len(uchars)
+vocab_size = len(uchars) + 1
+
+
+n_layer = 1
+n_embd = 16
+block_size = 16
+n_head = 4
+head_dim = n_embd // n_head
+matrix = lambda nout, nin, std=0.08: [[Value(random.gauss(0, std)) for _ in range(nin)] for _ in range(nout)]
+state_dict = {"wte": matrix(vocab_size, n_embd), "wpe": matrix(block_size, n_embd), "lm_head": matrix(vocab_size, n_embd)}
+for i in range(n_layer):
+    state_dict[f"layer{i}.attn_wq"] = matrix(n_embd, n_embd)
+    state_dict[f"layer{i}.attn_wk"] = matrix(n_embd, n_embd)
+    state_dict[f"layer{i}.attn_wv"] = matrix(n_embd, n_embd)
+    state_dict[f"layer{i}.attn_wo"] = matrix(n_embd, n_embd)
+    state_dict[f"layer{i}.mlp_fc1"] = matrix(4 * n_embd, n_embd)
+    state_dict[f"layer{i}.mlp_fc2"] = matrix(n_embd, 4 * n_embd)
+params = [p for mat in state_dict.values() for row in mat for p in row]
+print(f"num params: {len(params)}")
+
+
 learning_rate = 0.01
 beta1 = 0.85
 beta2 = 0.99
@@ -178,7 +180,7 @@ for step in range(num_steps):
     for pos_id in range(n):
         token_id = tokens[pos_id]
         target_id = tokens[pos_id + 1]
-        logits = gpt(token_id, pos_id, keys, values)
+        logits = gpt(token_id, pos_id, keys, values, state_dict, n_layer, n_head, head_dim)
         probs = softmax(logits)
         loss_t = -probs[target_id].log()
         losses.append(loss_t)
@@ -197,23 +199,4 @@ for step in range(num_steps):
 
     print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end="\r")
 
-
-#
-# inference
-#
-
-print("inference:")
-temperature = 0.5
-for sample_idx in range(20):
-    keys = [[] for _ in range(n_layer)]
-    values = [[] for _ in range(n_layer)]
-    token_id = BOS
-    sample = []
-    for pos_id in range(block_size):
-        logits = gpt(token_id, pos_id, keys, values)
-        probs = softmax([logit / temperature for logit in logits])
-        token_id = random.choices(range(vocab_size), weights=[p.data for p in probs])[0]
-        if token_id == BOS:
-            break
-        sample.append(uchars[token_id])
-    print(f"sample {sample_idx+1:2d}: {''.join(sample)}")
+assert_weights_match(state_dict)

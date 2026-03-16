@@ -7,6 +7,8 @@ import math
 import random
 from pathlib import Path
 
+from utils import dump_weights
+
 random.seed(42)
 
 
@@ -264,13 +266,15 @@ for step in range(num_steps):
 
     print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end="\r")
 
+dump_weights(state_dict)
+
 
 #
 # inference
 #
 
 
-print("inference:")
+print("\ninference:")
 temperature = 0.5
 for sample_idx in range(20):
     keys: list[list[list[Value]]] = [[] for _ in range(n_layer)]
