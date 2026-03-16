@@ -85,7 +85,7 @@ def print_times_all() -> None:
         print_times(times_dir / f"{name}.csv")
 
     chart_data = Data([[m * 1000] for _, m in entries], [e[0] for e in entries])
-    chart_args = Args(title="mean inference time [us]", width=60, format="{:.1f}", space_between=True)
+    chart_args = Args(title="mean train step time [us]", width=60, format="{:.1f}", space_between=True)
     BarChart(chart_data, chart_args).draw()
 
 
