@@ -7,7 +7,6 @@ import functools
 import random
 import time
 from collections import namedtuple
-from functools import partial
 from pathlib import Path
 
 import jax
@@ -51,12 +50,17 @@ def forward(params: dict[str, jax.Array], input_ids: jax.Array, target_ids: jax.
     return (per_token_loss * loss_mask).sum() / loss_mask.sum()
 
 
-@partial(jax.jit, static_argnums=(5,))
-def step_fn(params: dict[str, jax.Array], opt_state: optax.OptState, input_ids: jax.Array, target_ids: jax.Array, loss_mask: jax.Array, optimizer: optax.GradientTransformation) -> tuple[jax.Array, dict[str, jax.Array], optax.OptState]:
-    loss, grads = jax.value_and_grad(forward, argnums=0)(params, input_ids, target_ids, loss_mask)
-    updates, new_opt_state = optimizer.update(grads, opt_state)
-    new_params = optax.apply_updates(params, updates)
-    return loss, new_params, new_opt_state
+@jax.jit
+def train_fn(params: dict[str, jax.Array], opt_state: optax.OptState, train_inputs: jax.Array, train_targets: jax.Array, train_masks: jax.Array) -> tuple[tuple[dict[str, jax.Array], optax.OptState], jax.Array]:
+    def scan_body(carry, x):
+        params, opt_state = carry
+        input_ids, target_ids, loss_mask = x
+        loss, grads = jax.value_and_grad(forward, argnums=0)(params, input_ids, target_ids, loss_mask)
+        updates, new_opt_state = optimizer.update(grads, opt_state)
+        new_params = optax.apply_updates(params, updates)
+        return (new_params, new_opt_state), loss
+
+    return jax.lax.scan(scan_body, (params, opt_state), (train_inputs, train_targets, train_masks))
 
 
 @functools.cache
@@ -103,13 +107,17 @@ opt_state = optimizer.init(state_dict)
 
 tokenized = [tokenize(doc, uchars) for doc in tqdm(docs, desc="tokenizing")]
 
-step_times = []
-for step in range(NUM_STEPS):
-    t0 = time.perf_counter()
-    input_ids, target_ids, loss_mask = tokenized[step % len(tokenized)]
-    loss, state_dict, opt_state = step_fn(state_dict, opt_state, input_ids, target_ids, loss_mask, optimizer)
-    step_times.append(time.perf_counter() - t0)
-    print(f"step {step+1:4d} / {NUM_STEPS:4d} | loss {float(loss):.4f}", end="\r")
+train_inputs = jnp.stack([tokenized[step % len(tokenized)][0] for step in range(NUM_STEPS)])
+train_targets = jnp.stack([tokenized[step % len(tokenized)][1] for step in range(NUM_STEPS)])
+train_masks = jnp.stack([tokenized[step % len(tokenized)][2] for step in range(NUM_STEPS)])
+
+t0 = time.perf_counter()
+(state_dict, opt_state), losses = train_fn(state_dict, opt_state, train_inputs, train_targets, train_masks)
+jax.block_until_ready(losses)
+total_time = time.perf_counter() - t0
+
+step_times = [total_time / NUM_STEPS] * NUM_STEPS
+print(f"step {NUM_STEPS:4d} / {NUM_STEPS:4d} | loss {float(losses[-1]):.4f}")
 
 save_times(step_times)
 W = namedtuple("W", ["data"])
