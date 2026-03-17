@@ -52,9 +52,9 @@ def forward(params: dict[str, jax.Array], input_ids: jax.Array, target_ids: jax.
 
 @jax.jit
 def train_fn(params: dict[str, jax.Array], opt_state: optax.OptState, train_inputs: jax.Array, train_targets: jax.Array, train_masks: jax.Array) -> tuple[tuple[dict[str, jax.Array], optax.OptState], jax.Array]:
-    def scan_fn(carry, x):
-        params, opt_state = carry
-        input_ids, target_ids, loss_mask = x
+    def scan_fn(train_state: tuple[dict[str, jax.Array], optax.OptState], step_batch: tuple[jax.Array, jax.Array, jax.Array]) -> tuple[tuple[dict[str, jax.Array], optax.OptState], jax.Array]:
+        params, opt_state = train_state
+        input_ids, target_ids, loss_mask = step_batch
         loss, grads = jax.value_and_grad(forward, argnums=0)(params, input_ids, target_ids, loss_mask)
         updates, new_opt_state = optimizer.update(grads, opt_state)
         new_params = optax.apply_updates(params, updates)
@@ -68,21 +68,26 @@ def char_to_id(uchars_tuple: tuple[str, ...]) -> dict[str, int]:
     return {ch: i for i, ch in enumerate(uchars_tuple)}
 
 
-def tokenize(doc: str, uchars: list[str]) -> tuple[jax.Array, jax.Array, jax.Array]:
-    c2i = char_to_id(tuple(uchars))
-    bos = len(uchars)
-    tokens = [bos] + [c2i[ch] for ch in doc] + [bos]
-    n = min(BLOCK_SIZE, len(tokens) - 1)
+def tokenize(docs: list[str], uchars: list[str]) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def tokenize_doc(doc: str) -> tuple[jax.Array, jax.Array, jax.Array]:
+        c2i = char_to_id(tuple(uchars))
+        bos = len(uchars)
+        tokens = [bos] + [c2i[ch] for ch in doc] + [bos]
+        n = min(BLOCK_SIZE, len(tokens) - 1)
 
-    x = np.zeros(BLOCK_SIZE, dtype=np.int32)
-    y = np.zeros(BLOCK_SIZE, dtype=np.int32)
-    m = np.zeros(BLOCK_SIZE, dtype=np.float32)
+        input_ids = np.zeros(BLOCK_SIZE, dtype=np.int32)
+        target_ids = np.zeros(BLOCK_SIZE, dtype=np.int32)
+        loss_mask = np.zeros(BLOCK_SIZE, dtype=np.float32)
 
-    x[:n] = tokens[:n]
-    y[:n] = tokens[1 : n + 1]
-    m[:n] = 1.0
+        input_ids[:n] = tokens[:n]
+        target_ids[:n] = tokens[1 : n + 1]
+        loss_mask[:n] = 1.0
 
-    return jnp.array(x), jnp.array(y), jnp.array(m)
+        return jnp.array(input_ids), jnp.array(target_ids), jnp.array(loss_mask)
+
+    per_doc = [tokenize_doc(doc) for doc in tqdm(docs, desc="tokenizing")]
+    train_inputs, train_targets, train_masks = map(jnp.stack, zip(*[per_doc[step % len(per_doc)] for step in range(NUM_STEPS)]))
+    return train_inputs, train_targets, train_masks
 
 
 docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
@@ -105,18 +110,13 @@ state_dict: dict[str, jax.Array] = {
 optimizer = optax.adam(optax.linear_schedule(0.01, 0.0, NUM_STEPS), b1=0.85, b2=0.99, eps=1e-8)
 opt_state = optimizer.init(state_dict)
 
-tokenized = [tokenize(doc, uchars) for doc in tqdm(docs, desc="tokenizing")]
-
-train_inputs = jnp.stack([tokenized[step % len(tokenized)][0] for step in range(NUM_STEPS)])
-train_targets = jnp.stack([tokenized[step % len(tokenized)][1] for step in range(NUM_STEPS)])
-train_masks = jnp.stack([tokenized[step % len(tokenized)][2] for step in range(NUM_STEPS)])
+train_inputs, train_targets, train_masks = tokenize(docs, uchars)
 
 t0 = time.perf_counter()
-(state_dict, opt_state), losses = train_fn(state_dict, opt_state, train_inputs, train_targets, train_masks)
+(state_dict, _), losses = train_fn(state_dict, opt_state, train_inputs, train_targets, train_masks)
 jax.block_until_ready(losses)
 total_time = time.perf_counter() - t0
-
-step_times = [total_time / NUM_STEPS] * NUM_STEPS
+step_times = [total_time / NUM_STEPS] * NUM_STEPS  # we cant measure individual steps, everything is jitted at once
 print(f"step {NUM_STEPS:4d} / {NUM_STEPS:4d} | loss {float(losses[-1]):.4f}")
 
 save_times(step_times)
