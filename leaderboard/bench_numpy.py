@@ -30,7 +30,10 @@ state_dict = {
     "wte": matrix(vocab_size, n_embd),
     "wpe": matrix(block_size, n_embd),
     "lm_head": matrix(vocab_size, n_embd),
-    **{f"layer{i}.attn_{n}": matrix(n_embd, n_embd) for i in range(n_layer) for n in "wq wk wv wo".split()},
+    **{f"layer{i}.attn_wq": matrix(n_embd, n_embd) for i in range(n_layer)},
+    **{f"layer{i}.attn_wk": matrix(n_embd, n_embd) for i in range(n_layer)},
+    **{f"layer{i}.attn_wv": matrix(n_embd, n_embd) for i in range(n_layer)},
+    **{f"layer{i}.attn_wo": matrix(n_embd, n_embd) for i in range(n_layer)},
     **{f"layer{i}.mlp_fc1": matrix(4 * n_embd, n_embd) for i in range(n_layer)},
     **{f"layer{i}.mlp_fc2": matrix(n_embd, 4 * n_embd) for i in range(n_layer)},
 }

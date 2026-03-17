@@ -58,7 +58,10 @@ state_dict: dict[str, jax.Array] = {
     "wte": matrix(vocab_size, N_EMBED),
     "wpe": matrix(BLOCK_SIZE, N_EMBED),
     "lm_head": matrix(vocab_size, N_EMBED),
-    **{f"layer{i}.attn_{n}": matrix(N_EMBED, N_EMBED) for i in range(N_LAYER) for n in "wq wk wv wo".split()},
+    **{f"layer{i}.attn_wq": matrix(N_EMBED, N_EMBED) for i in range(N_LAYER)},
+    **{f"layer{i}.attn_wk": matrix(N_EMBED, N_EMBED) for i in range(N_LAYER)},
+    **{f"layer{i}.attn_wv": matrix(N_EMBED, N_EMBED) for i in range(N_LAYER)},
+    **{f"layer{i}.attn_wo": matrix(N_EMBED, N_EMBED) for i in range(N_LAYER)},
     **{f"layer{i}.mlp_fc1": matrix(4 * N_EMBED, N_EMBED) for i in range(N_LAYER)},
     **{f"layer{i}.mlp_fc2": matrix(N_EMBED, 4 * N_EMBED) for i in range(N_LAYER)},
 }
