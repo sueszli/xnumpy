@@ -115,7 +115,6 @@ t0 = time.perf_counter()
 jax.block_until_ready(losses)
 total_time = time.perf_counter() - t0
 step_times = [total_time / NUM_STEPS] * NUM_STEPS  # we cant measure individual steps, everything is jitted at once
-print(f"step {NUM_STEPS:4d} / {NUM_STEPS:4d} | loss {float(losses[-1]):.4f}")
 
 save_times(step_times)
 W = namedtuple("W", ["data"])
