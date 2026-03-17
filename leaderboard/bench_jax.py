@@ -52,7 +52,7 @@ def forward(params: dict[str, jax.Array], input_ids: jax.Array, target_ids: jax.
 
 @jax.jit
 def train_fn(params: dict[str, jax.Array], opt_state: optax.OptState, train_inputs: jax.Array, train_targets: jax.Array, train_masks: jax.Array) -> tuple[tuple[dict[str, jax.Array], optax.OptState], jax.Array]:
-    def scan_body(carry, x):
+    def scan_fn(carry, x):
         params, opt_state = carry
         input_ids, target_ids, loss_mask = x
         loss, grads = jax.value_and_grad(forward, argnums=0)(params, input_ids, target_ids, loss_mask)
@@ -60,7 +60,7 @@ def train_fn(params: dict[str, jax.Array], opt_state: optax.OptState, train_inpu
         new_params = optax.apply_updates(params, updates)
         return (new_params, new_opt_state), loss
 
-    return jax.lax.scan(scan_body, (params, opt_state), (train_inputs, train_targets, train_masks))
+    return jax.lax.scan(scan_fn, (params, opt_state), (train_inputs, train_targets, train_masks))
 
 
 @functools.cache
