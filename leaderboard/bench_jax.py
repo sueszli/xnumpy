@@ -1,6 +1,6 @@
 # /// script
 # requires-python = "==3.14.*"
-# dependencies = ["jax[cpu]", "optax"]
+# dependencies = ["jax[cpu]", "optax", "tqdm"]
 # ///
 
 import random
@@ -12,6 +12,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import optax
+from tqdm import tqdm
 from utils import assert_weights_match, save_times
 
 jax.config.update("jax_enable_x64", True)
@@ -85,8 +86,7 @@ state_dict: dict[str, jax.Array] = {
 optimizer = optax.adam(optax.linear_schedule(0.01, 0.0, NUM_STEPS), b1=0.85, b2=0.99, eps=1e-8)
 opt_state = optimizer.init(state_dict)
 
-print("tokenizing")
-tokenized = [tokenize(doc, uchars) for doc in docs]
+tokenized = [tokenize(doc, uchars) for doc in tqdm(docs, desc="tokenizing")]
 
 step_times = []
 for step in range(NUM_STEPS):
