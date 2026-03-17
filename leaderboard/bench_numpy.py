@@ -25,19 +25,15 @@ block_size = 16
 n_head = 4
 head_dim = n_embd // n_head
 
-
-def matrix(nout: int, nin: int, std: float = 0.08) -> np.ndarray:
-    return np.array([[random.gauss(0, std) for _ in range(nin)] for _ in range(nout)], dtype=np.float64)
-
-
-state_dict = {"wte": matrix(vocab_size, n_embd), "wpe": matrix(block_size, n_embd), "lm_head": matrix(vocab_size, n_embd)}
-for i in range(n_layer):
-    state_dict[f"layer{i}.attn_wq"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wk"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wv"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.attn_wo"] = matrix(n_embd, n_embd)
-    state_dict[f"layer{i}.mlp_fc1"] = matrix(4 * n_embd, n_embd)
-    state_dict[f"layer{i}.mlp_fc2"] = matrix(n_embd, 4 * n_embd)
+matrix = lambda nout, nin, std=0.08: np.array([[random.gauss(0, std) for _ in range(nin)] for _ in range(nout)], dtype=np.float64)
+state_dict = {
+    "wte": matrix(vocab_size, n_embd),
+    "wpe": matrix(block_size, n_embd),
+    "lm_head": matrix(vocab_size, n_embd),
+    **{f"layer{i}.attn_{n}": matrix(n_embd, n_embd) for i in range(n_layer) for n in "wq wk wv wo".split()},
+    **{f"layer{i}.mlp_fc1": matrix(4 * n_embd, n_embd) for i in range(n_layer)},
+    **{f"layer{i}.mlp_fc2": matrix(n_embd, 4 * n_embd) for i in range(n_layer)},
+}
 
 
 def _rmsnorm_fwd(x: np.ndarray):
