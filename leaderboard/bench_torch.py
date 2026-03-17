@@ -25,7 +25,6 @@ def rmsnorm(x: torch.Tensor) -> torch.Tensor:
     return x * (x.pow(2).mean(-1, keepdim=True) + 1e-5).rsqrt()
 
 
-@torch.compile
 def forward(params: dict[str, torch.Tensor], input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
     x = rmsnorm(params["wte"][input_ids] + params["wpe"])
     for li in range(N_LAYER):
@@ -44,13 +43,13 @@ def forward(params: dict[str, torch.Tensor], input_ids: torch.Tensor, target_ids
     return (per_token_loss * loss_mask).sum() / loss_mask.sum()
 
 
-def step_fn(params: dict[str, torch.Tensor], opt: torch.optim.Optimizer, input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor, lr: float) -> torch.Tensor:
-    opt.zero_grad(set_to_none=True)
-    loss = forward(params, input_ids, target_ids, loss_mask)
-    loss.backward()
-    opt.param_groups[0]["lr"] = lr
-    opt.step()
-    return loss
+@torch.compile
+def train_step(params: dict[str, torch.Tensor], m: dict[str, torch.Tensor], v: dict[str, torch.Tensor], lr: torch.Tensor, bc1: torch.Tensor, bc2: torch.Tensor, input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor) -> tuple:
+    grads, loss = torch.func.grad_and_value(forward)(params, input_ids, target_ids, loss_mask)
+    new_m = {k: 0.85 * m[k] + 0.15 * grads[k] for k in params}
+    new_v = {k: 0.99 * v[k] + 0.01 * grads[k].pow(2) for k in params}
+    new_params = {k: params[k] - lr * (new_m[k] / bc1) / ((new_v[k] / bc2).sqrt() + 1e-8) for k in params}
+    return new_params, new_m, new_v, loss
 
 
 def tokenize(docs: list[str], uchars: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -78,7 +77,7 @@ docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
 random.shuffle(docs)
 uchars = sorted(set("".join(docs)))
 
-matrix = lambda nout, nin, std=0.08: torch.tensor([[random.gauss(0, std) for _ in range(nin)] for _ in range(nout)], dtype=torch.float64).requires_grad_(True)
+matrix = lambda nout, nin, std=0.08: torch.tensor([[random.gauss(0, std) for _ in range(nin)] for _ in range(nout)], dtype=torch.float64)
 state_dict: dict[str, torch.Tensor] = {
     "wte": matrix(len(uchars) + 1, N_EMBED),
     "wpe": matrix(BLOCK_SIZE, N_EMBED),
@@ -91,18 +90,21 @@ state_dict: dict[str, torch.Tensor] = {
     **{f"layer{i}.mlp_fc2": matrix(N_EMBED, 4 * N_EMBED) for i in range(N_LAYER)},
 }
 
-make_optimizer = lambda params: torch.optim.Adam(list(params.values()), lr=0.01, betas=(0.85, 0.99), eps=1e-8, foreach=True)
-optimizer = make_optimizer(state_dict)
 train_inputs, train_targets, train_masks = tokenize(docs, uchars)
 
-# precompile: trigger torch.compile before timing
-step_fn(_p := {k: v.clone().detach().requires_grad_(True) for k, v in state_dict.items()}, make_optimizer(_p), train_inputs[0], train_targets[0], train_masks[0], 0.01)
-del _p
+m = {k: torch.zeros_like(v) for k, v in state_dict.items()}
+v_mom = {k: torch.zeros_like(v) for k, v in state_dict.items()}
+lrs = torch.tensor([0.01 * (1 - step / NUM_STEPS) for step in range(NUM_STEPS)], dtype=torch.float64)
+bc1s = torch.tensor([1 - 0.85 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64)
+bc2s = torch.tensor([1 - 0.99 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64)
+
+# precompile: functional → no mutation, so we can call directly without cloning
+train_step(state_dict, m, v_mom, lrs[0], bc1s[0], bc2s[0], train_inputs[0], train_targets[0], train_masks[0])
 
 step_times = []
 for step in range(NUM_STEPS):
     t0 = time.perf_counter()
-    loss = step_fn(state_dict, optimizer, train_inputs[step], train_targets[step], train_masks[step], 0.01 * (1 - step / NUM_STEPS))
+    state_dict, m, v_mom, loss = train_step(state_dict, m, v_mom, lrs[step], bc1s[step], bc2s[step], train_inputs[step], train_targets[step], train_masks[step])
     step_times.append(time.perf_counter() - t0)
     print(f"step {step+1:4d} / {NUM_STEPS:4d} | loss {loss.item():.4f}", end="\r")
 
