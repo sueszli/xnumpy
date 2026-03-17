@@ -66,12 +66,8 @@ for i in range(n_layer):
     state_dict[f"layer{i}.mlp_fc2"] = matrix(n_embd, 4 * n_embd)
 
 
-learning_rate = 0.01
-beta1 = 0.85
-beta2 = 0.99
-eps_adam = 1e-8
 num_steps = 1000
-optimizer = optax.adam(optax.linear_schedule(learning_rate, 0.0, num_steps), b1=beta1, b2=beta2, eps=eps_adam)
+optimizer = optax.adam(optax.linear_schedule(0.01, 0.0, num_steps), b1=0.85, b2=0.99, eps=1e-8)
 opt_state = optimizer.init(state_dict)
 
 
@@ -84,12 +80,10 @@ def step_fn(input_ids, target_ids, loss_mask, params, opt_state):
 
 
 def tokenize(doc):
-    tokens = [BOS] + [uchars.index(ch) for ch in doc] + [BOS]
+    tokens = jnp.array([BOS] + [uchars.index(ch) for ch in doc] + [BOS])
     n = min(block_size, len(tokens) - 1)
-    inp = tokens[:n] + [0] * (block_size - n)
-    tgt = tokens[1 : n + 1] + [0] * (block_size - n)
-    mask = [1.0] * n + [0.0] * (block_size - n)
-    return jnp.array(inp), jnp.array(tgt), jnp.array(mask)
+    pad = (0, block_size - n)
+    return jnp.pad(tokens[:n], pad), jnp.pad(tokens[1 : n + 1], pad), jnp.pad(jnp.ones(n), pad)
 
 
 tokenized = [tokenize(doc) for doc in docs]
