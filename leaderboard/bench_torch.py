@@ -98,7 +98,7 @@ lrs = torch.tensor([0.01 * (1 - step / NUM_STEPS) for step in range(NUM_STEPS)],
 bc1s = torch.tensor([1 - 0.85 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64)
 bc2s = torch.tensor([1 - 0.99 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64)
 
-# precompile: functional → no mutation, so we can call directly without cloning
+# precompile
 train_step(state_dict, m, v_mom, lrs[0], bc1s[0], bc2s[0], train_inputs[0], train_targets[0], train_masks[0])
 
 step_times = []
