@@ -103,5 +103,5 @@ for step in range(num_steps):
     step_times.append(time.perf_counter() - t0)
 
 save_times(step_times)
-W = namedtuple("W", ["data"])  # assert_weights_match expects .data on each element. JAX arrays don't have it
+W = namedtuple("W", ["data"])
 assert_weights_match({k: [[W(float(v)) for v in row] for row in mat.tolist()] for k, mat in state_dict.items()})
