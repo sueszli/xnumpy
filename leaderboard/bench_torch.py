@@ -44,6 +44,15 @@ def forward(params: dict[str, torch.Tensor], input_ids: torch.Tensor, target_ids
     return (per_token_loss * loss_mask).sum() / loss_mask.sum()
 
 
+def step_fn(params: dict[str, torch.Tensor], opt: torch.optim.Optimizer, input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor, lr: float) -> torch.Tensor:
+    opt.zero_grad(set_to_none=True)
+    loss = forward(params, input_ids, target_ids, loss_mask)
+    loss.backward()
+    opt.param_groups[0]["lr"] = lr
+    opt.step()
+    return loss
+
+
 def tokenize(docs: list[str], uchars: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     def tokenize_doc(doc: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         c2i = {ch: i for i, ch in enumerate(uchars)}
@@ -85,21 +94,16 @@ state_dict: dict[str, torch.Tensor] = {
 optimizer = torch.optim.Adam(list(state_dict.values()), lr=0.01, betas=(0.85, 0.99), eps=1e-8, foreach=True)
 train_inputs, train_targets, train_masks = tokenize(docs, uchars)
 
-# precompile / warmup
+# precompile: run one full step on cloned params to trigger torch.compile before timing
 _p = {k: v.clone().detach().requires_grad_(True) for k, v in state_dict.items()}
 _o = torch.optim.Adam(list(_p.values()), lr=0.01, betas=(0.85, 0.99), eps=1e-8, foreach=True)
-forward(_p, train_inputs[0], train_targets[0], train_masks[0]).backward()
-_o.step()
+step_fn(_p, _o, train_inputs[0], train_targets[0], train_masks[0], 0.01)
 del _p, _o
 
 step_times = []
 for step in range(NUM_STEPS):
     t0 = time.perf_counter()
-    optimizer.zero_grad(set_to_none=True)
-    loss = forward(state_dict, train_inputs[step], train_targets[step], train_masks[step])
-    loss.backward()
-    optimizer.param_groups[0]["lr"] = 0.01 * (1 - step / NUM_STEPS)
-    optimizer.step()
+    loss = step_fn(state_dict, optimizer, train_inputs[step], train_targets[step], train_masks[step], 0.01 * (1 - step / NUM_STEPS))
     step_times.append(time.perf_counter() - t0)
     print(f"step {step+1:4d} / {NUM_STEPS:4d} | loss {loss.item():.4f}", end="\r")
 
