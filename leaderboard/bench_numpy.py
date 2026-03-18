@@ -134,7 +134,7 @@ def step_fn(params: dict, opt_state: dict, grads: dict, input_ids: np.ndarray, t
     tmp = opt_state["tmp"]
 
     offset = 0
-    for k in PARAM_KEYS:
+    for k in params.keys():
         g = grads[k]
         s = g.size
         buf[offset : offset + s] = g.ravel()
@@ -193,11 +193,10 @@ state_dict = {
     **{f"layer{i}.mlp_fc2": matrix(N_EMBED, 4 * N_EMBED) for i in range(N_LAYER)},
 }
 
-PARAM_KEYS = list(state_dict.keys())
-flat_params = np.concatenate([state_dict[k].ravel() for k in PARAM_KEYS])
+flat_params = np.concatenate([state_dict[k].ravel() for k in state_dict])
 total_params = flat_params.size
 offset = 0
-for k in PARAM_KEYS:
+for k in state_dict:
     n = state_dict[k].size
     state_dict[k] = flat_params[offset : offset + n].reshape(state_dict[k].shape)
     offset += n
@@ -211,7 +210,7 @@ opt_state = {
 }
 
 tokenized = [tokenize(doc, uchars) for doc in docs]
-grads = {k: np.zeros_like(state_dict[k]) for k in PARAM_KEYS}
+grads = {k: np.zeros_like(state_dict[k]) for k in state_dict}
 
 step_times = []
 for step in range(NUM_STEPS):
