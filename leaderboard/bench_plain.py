@@ -26,6 +26,45 @@ LayerCache = namedtuple("LayerCache", ["x_pre_attn", "xn_attn", "rms_attn", "q",
 FwdCache = namedtuple("FwdCache", ["input_ids", "target_ids", "loss_mask", "sum_mask", "emb", "rms_init", "x", "probs", "layer_caches"])
 
 
+def linear_fwd(x: list[list[float]], W: list[list[float]]) -> list[list[float]]:
+    n = len(x)
+    out_dim = len(W)
+    out = [[0.0] * out_dim for _ in range(n)]
+    for i in range(n):
+        xi = x[i]
+        out_i = out[i]
+        for j in range(out_dim):
+            out_i[j] = sum(map(mul, xi, W[j]))
+    return out
+
+
+def linear_bwd_x(dout: list[list[float]], W: list[list[float]]) -> list[list[float]]:
+    n = len(dout)
+    k = len(W[0])
+    WT = list(zip(*W))
+    dx = [[0.0] * k for _ in range(n)]
+    for i in range(n):
+        dout_i = dout[i]
+        dx_i = dx[i]
+        for d in range(k):
+            dx_i[d] = sum(map(mul, dout_i, WT[d]))
+    return dx
+
+
+def linear_bwd_w(dout: list[list[float]], x: list[list[float]]) -> list[list[float]]:
+    out_dim = len(dout[0])
+    k = len(x[0])
+    doutT = list(zip(*dout))
+    xT = list(zip(*x))
+    dW = [[0.0] * k for _ in range(out_dim)]
+    for j in range(out_dim):
+        doutT_j = doutT[j]
+        dW_j = dW[j]
+        for d in range(k):
+            dW_j[d] = sum(map(mul, doutT_j, xT[d]))
+    return dW
+
+
 def rmsnorm_fwd(x: list[list[float]]) -> tuple[list[list[float]], list[float]]:
     n = len(x)
     d = len(x[0])
@@ -57,11 +96,6 @@ def rmsnorm_bwd(dout: list[list[float]], x: list[list[float]], rms: list[float])
 
 
 def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[float]], LayerCache]:
-    _sum = sum  # get rid of these ???
-    _exp = math.exp
-    _rD = range(N_EMBED)
-    _rH = range(N_EMBED // N_HEAD)
-
     n = len(x)
     head_dim = N_EMBED // N_HEAD
     wq = params[f"layer{li}.attn_wq"]
@@ -74,17 +108,12 @@ def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[fl
     x_pre_attn = x
     xn_attn, rms_attn = rmsnorm_fwd(x)
 
-    q = [[[0.0] * head_dim for _ in range(n)] for _ in range(N_HEAD)]
-    k = [[[0.0] * head_dim for _ in range(n)] for _ in range(N_HEAD)]
-    v = [[[0.0] * head_dim for _ in range(n)] for _ in range(N_HEAD)]
-    for i in range(n):  # these are repetitive! figure out relevant kernels
-        xn_i = xn_attn[i]
-        for j in _rD:
-            wq_j, wk_j, wv_j = wq[j], wk[j], wv[j]
-            h_idx, d_idx = j // head_dim, j % head_dim
-            q[h_idx][i][d_idx] = _sum(map(mul, xn_i, wq_j))
-            k[h_idx][i][d_idx] = _sum(map(mul, xn_i, wk_j))
-            v[h_idx][i][d_idx] = _sum(map(mul, xn_i, wv_j))
+    q_flat = linear_fwd(xn_attn, wq)
+    k_flat = linear_fwd(xn_attn, wk)
+    v_flat = linear_fwd(xn_attn, wv)
+    q = [[row[h * head_dim : (h + 1) * head_dim] for row in q_flat] for h in range(N_HEAD)]
+    k = [[row[h * head_dim : (h + 1) * head_dim] for row in k_flat] for h in range(N_HEAD)]
+    v = [[row[h * head_dim : (h + 1) * head_dim] for row in v_flat] for h in range(N_HEAD)]
 
     inv_scale = 1.0 / head_dim**0.5
     attn_w = [[[0.0] * n for _ in range(n)] for _ in range(N_HEAD)]
@@ -94,59 +123,35 @@ def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[fl
         h_off = h * head_dim
         for i in range(n):
             q_h_i = q_h[i]
-            qk_i = [_sum(map(mul, q_h_i, k_h[j])) * inv_scale if j <= i else -1e10 for j in range(n)]
+            qk_i = [sum(map(mul, q_h_i, k_h[j])) * inv_scale if j <= i else -1e10 for j in range(n)]
             max_val = max(qk_i)
-            exps = [_exp(v - max_val) for v in qk_i]
-            total = _sum(exps)
+            exps = [math.exp(v - max_val) for v in qk_i]
+            total = sum(exps)
             aw_i = [e / total for e in exps]
             attn_w[h][i] = aw_i
             flat_i = attn_out_flat[i]
-            for d in _rH:
+            for d in range(head_dim):
                 val = 0.0
                 for j in range(n):
                     val += aw_i[j] * v_h[j][d]
                 flat_i[h_off + d] = val
 
-    x = [[0.0] * N_EMBED for _ in range(n)]
-    for i in range(n):
-        flat_i, pre_i, x_i = attn_out_flat[i], x_pre_attn[i], x[i]
-        for j in _rD:
-            val = 0.0
-            for d in _rD:
-                val += flat_i[d] * wo[j][d]
-            x_i[j] = val + pre_i[j]
+    attn_proj = linear_fwd(attn_out_flat, wo)
+    x = [[attn_proj[i][j] + x_pre_attn[i][j] for j in range(N_EMBED)] for i in range(n)]
 
     x_pre_mlp = x
     xn_mlp, rms_mlp = rmsnorm_fwd(x)
 
-    mlp_dim = 4 * N_EMBED
-    _rM = range(mlp_dim)
-    h_pre = [[0.0] * mlp_dim for _ in range(n)]
-    h_val = [[0.0] * mlp_dim for _ in range(n)]
-    for i in range(n):
-        xn_i, hp_i, hv_i = xn_mlp[i], h_pre[i], h_val[i]
-        for j in _rM:
-            val = _sum(map(mul, xn_i, fc1[j]))
-            hp_i[j] = val
-            hv_i[j] = val if val > 0.0 else 0.0
+    h_pre = linear_fwd(xn_mlp, fc1)
+    h_val = [[v if v > 0.0 else 0.0 for v in row] for row in h_pre]  # relu
 
-    x = [[0.0] * N_EMBED for _ in range(n)]
-    for i in range(n):
-        hv_i, pre_i, x_i = h_val[i], x_pre_mlp[i], x[i]
-        for j in _rD:
-            val = 0.0
-            for d in _rM:
-                val += hv_i[d] * fc2[j][d]
-            x_i[j] = val + pre_i[j]
+    mlp_proj = linear_fwd(h_val, fc2)
+    x = [[mlp_proj[i][j] + x_pre_mlp[i][j] for j in range(N_EMBED)] for i in range(n)]
 
     return x, LayerCache(x_pre_attn, xn_attn, rms_attn, q, k, v, attn_w, attn_out_flat, x_pre_mlp, xn_mlp, rms_mlp, h_pre, h_val)
 
 
 def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -> tuple[list[list[float]], dict]:
-    _sum = sum
-    _rD = range(N_EMBED)
-    _rH = range(N_EMBED // N_HEAD)
-
     n = len(dx)
     head_dim = N_EMBED // N_HEAD
     wq = params[f"layer{li}.attn_wq"]
@@ -156,74 +161,24 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
     fc1 = params[f"layer{li}.mlp_fc1"]
     fc2 = params[f"layer{li}.mlp_fc2"]
 
-    mlp_dim = 4 * N_EMBED
-    _rM = range(mlp_dim)
     inv_scale = 1.0 / head_dim**0.5
 
     dx_res_mlp = dx
 
-    h_cache = cache.h
-    dfc2 = [[0.0] * mlp_dim for _ in _rD]
-    for j in _rD:
-        dfc2_j = dfc2[j]
-        for d in _rM:
-            val = 0.0
-            for i in range(n):
-                val += dx[i][j] * h_cache[i][d]
-            dfc2_j[d] = val
-
-    h_pre_cache = cache.h_pre
-    dh_pre = [[0.0] * mlp_dim for _ in range(n)]
-    for i in range(n):
-        dx_i, hp_i, dhp_i = dx[i], h_pre_cache[i], dh_pre[i]
-        for j in _rM:
-            val = 0.0
-            for d in _rD:
-                val += dx_i[d] * fc2[d][j]
-            dhp_i[j] = val if hp_i[j] > 0.0 else 0.0
-
-    xn_mlp_cache = cache.xn_mlp
-    dfc1 = [[0.0] * N_EMBED for _ in _rM]
-    for j in _rM:
-        dfc1_j = dfc1[j]
-        for d in _rD:
-            val = 0.0
-            for i in range(n):
-                val += dh_pre[i][j] * xn_mlp_cache[i][d]
-            dfc1_j[d] = val
-
-    dxn_mlp = [[0.0] * N_EMBED for _ in range(n)]
-    for i in range(n):
-        dhp_i, dxn_i = dh_pre[i], dxn_mlp[i]
-        for d in _rD:
-            val = 0.0
-            for j in _rM:
-                val += dhp_i[j] * fc1[j][d]
-            dxn_i[d] = val
+    dfc2 = linear_bwd_w(dx, cache.h)
+    dh_pre = linear_bwd_x(dx, fc2)
+    mlp_dim = len(fc1)
+    dh_pre = [[dh_pre[i][j] if cache.h_pre[i][j] > 0.0 else 0.0 for j in range(mlp_dim)] for i in range(n)]
+    dfc1 = linear_bwd_w(dh_pre, cache.xn_mlp)
+    dxn_mlp = linear_bwd_x(dh_pre, fc1)
 
     dx_rms = rmsnorm_bwd(dxn_mlp, cache.x_pre_mlp, cache.rms_mlp)
     dx = [[a + b for a, b in zip(r1, r2)] for r1, r2 in zip(dx_rms, dx_res_mlp)]
 
     dx_res_attn = dx
 
-    attn_out_flat_cache = cache.attn_out_flat
-    dwo = [[0.0] * N_EMBED for _ in _rD]
-    for j in _rD:
-        dwo_j = dwo[j]
-        for d in _rD:
-            val = 0.0
-            for i in range(n):
-                val += dx[i][j] * attn_out_flat_cache[i][d]
-            dwo_j[d] = val
-
-    dattn_out_flat = [[0.0] * N_EMBED for _ in range(n)]
-    for i in range(n):
-        dx_i, dat_i = dx[i], dattn_out_flat[i]
-        for d in _rD:
-            val = 0.0
-            for j in _rD:
-                val += dx_i[j] * wo[j][d]
-            dat_i[d] = val
+    dwo = linear_bwd_w(dx, cache.attn_out_flat)
+    dattn_out_flat = linear_bwd_x(dx, wo)
 
     attn_w_cache = cache.attn_w
     v_cache = cache.v
@@ -235,7 +190,7 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
         dv_h, daw_h = dv[h], dattn_w[h]
         for i in range(n):
             dv_h_i = dv_h[i]
-            for d in _rH:
+            for d in range(head_dim):
                 val = 0.0
                 for j in range(n):
                     val += aw_h[j][i] * dattn_out_flat[j][h_off + d]
@@ -244,7 +199,7 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
             dat_i, daw_h_i = dattn_out_flat[i], daw_h[i]
             for j in range(n):
                 val = 0.0
-                for d in _rH:
+                for d in range(head_dim):
                     val += dat_i[h_off + d] * v_h[j][d]
                 daw_h_i[j] = val
 
@@ -253,7 +208,7 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
         aw_h, daw_h, dla_h = attn_w_cache[h], dattn_w[h], dlogits_attn[h]
         for i in range(n):
             aw_i, daw_i = aw_h[i], daw_h[i]
-            s = _sum(map(mul, daw_i, aw_i))
+            s = sum(map(mul, daw_i, aw_i))
             dla_i = dla_h[i]
             for j in range(n):
                 dla_i[j] = aw_i[j] * (daw_i[j] - s) * inv_scale
@@ -268,7 +223,7 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
         dq_h, dk_h = dq[h], dk[h]
         for i in range(n):
             dla_i, dq_i, dk_i = dla_h[i], dq_h[i], dk_h[i]
-            for d in _rH:
+            for d in range(head_dim):
                 val1, val2 = 0.0, 0.0
                 for j in range(n):
                     val1 += dla_i[j] * k_h[j][d]
@@ -276,36 +231,18 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
                 dq_i[d] = val1
                 dk_i[d] = val2
 
-    xn_attn_cache = cache.xn_attn
-    dwq = [[0.0] * N_EMBED for _ in _rD]
-    dwk = [[0.0] * N_EMBED for _ in _rD]
-    dwv = [[0.0] * N_EMBED for _ in _rD]
-    for j in _rD:
-        h_idx, d_idx = j // head_dim, j % head_dim
-        dq_h, dk_h, dv_h = dq[h_idx], dk[h_idx], dv[h_idx]
-        dwq_j, dwk_j, dwv_j = dwq[j], dwk[j], dwv[j]
-        for k_dim in _rD:
-            val_q, val_k, val_v = 0.0, 0.0, 0.0
-            for i in range(n):
-                xn_val = xn_attn_cache[i][k_dim]
-                val_q += dq_h[i][d_idx] * xn_val
-                val_k += dk_h[i][d_idx] * xn_val
-                val_v += dv_h[i][d_idx] * xn_val
-            dwq_j[k_dim] = val_q
-            dwk_j[k_dim] = val_k
-            dwv_j[k_dim] = val_v
+    dq_flat = [[v for h in range(N_HEAD) for v in dq[h][i]] for i in range(n)]
+    dk_flat = [[v for h in range(N_HEAD) for v in dk[h][i]] for i in range(n)]
+    dv_flat = [[v for h in range(N_HEAD) for v in dv[h][i]] for i in range(n)]
 
-    dxn_attn = [[0.0] * N_EMBED for _ in range(n)]
-    for i in range(n):
-        dq_flat = [dq[j // head_dim][i][j % head_dim] for j in _rD]
-        dk_flat = [dk[j // head_dim][i][j % head_dim] for j in _rD]
-        dv_flat = [dv[j // head_dim][i][j % head_dim] for j in _rD]
-        dxn_i = dxn_attn[i]
-        for k_dim in _rD:
-            val = 0.0
-            for j in _rD:
-                val += dq_flat[j] * wq[j][k_dim] + dk_flat[j] * wk[j][k_dim] + dv_flat[j] * wv[j][k_dim]
-            dxn_i[k_dim] = val
+    dwq = linear_bwd_w(dq_flat, cache.xn_attn)
+    dwk = linear_bwd_w(dk_flat, cache.xn_attn)
+    dwv = linear_bwd_w(dv_flat, cache.xn_attn)
+
+    WqT = list(zip(*wq))
+    WkT = list(zip(*wk))
+    WvT = list(zip(*wv))
+    dxn_attn = [[sum(map(mul, dq_flat[i], WqT[d])) + sum(map(mul, dk_flat[i], WkT[d])) + sum(map(mul, dv_flat[i], WvT[d])) for d in range(N_EMBED)] for i in range(n)]
 
     dx_rms = rmsnorm_bwd(dxn_attn, cache.x_pre_attn, cache.rms_attn)
     dx = [[a + b for a, b in zip(r1, r2)] for r1, r2 in zip(dx_rms, dx_res_attn)]
@@ -322,19 +259,13 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
 
 
 def forward(params: dict, input_ids: list[int], target_ids: list[int], loss_mask: list[float]) -> tuple[float, FwdCache]:
-    _exp = math.exp
-    _log = math.log
-    _sum = sum
-
     n = len(input_ids)
-    _rD = range(N_EMBED)
-    _rn = range(n)
 
     wte, wpe = params["wte"], params["wpe"]
-    emb = [[0.0] * N_EMBED for _ in _rn]
-    for i in _rn:
+    emb = [[0.0] * N_EMBED for _ in range(n)]
+    for i in range(n):
         wte_i, wpe_i, emb_i = wte[input_ids[i]], wpe[i], emb[i]
-        for j in _rD:
+        for j in range(N_EMBED):
             emb_i[j] = wte_i[j] + wpe_i[j]
     x, rms_init = rmsnorm_fwd(emb)
 
@@ -344,56 +275,33 @@ def forward(params: dict, input_ids: list[int], target_ids: list[int], loss_mask
         layer_caches.append(lc)
 
     lm_head = params["lm_head"]
-    vocab_size = len(lm_head)
-    _rV = range(vocab_size)
+    logits = linear_fwd(x, lm_head)  # (n, vocab_size)
     probs = []
-    for i in _rn:
-        x_i = x[i]
-        logits_i = [_sum(map(mul, x_i, lm_head[j])) for j in _rV]
+    for i in range(n):
+        logits_i = logits[i]
         max_val = max(logits_i)
-        exps = [_exp(v - max_val) for v in logits_i]
-        total = _sum(exps)
+        exps = [math.exp(v - max_val) for v in logits_i]
+        total = sum(exps)
         probs.append([e / total for e in exps])
 
-    sum_mask = _sum(loss_mask) or 1.0
-    loss = -_sum(_log(probs[i][target_ids[i]]) * loss_mask[i] for i in _rn) / sum_mask
+    sum_mask = sum(loss_mask) or 1.0
+    loss = -sum(math.log(probs[i][target_ids[i]]) * loss_mask[i] for i in range(n)) / sum_mask
 
     return loss, FwdCache(input_ids, target_ids, loss_mask, sum_mask, emb, rms_init, x, probs, layer_caches)
 
 
 def backward(params: dict, cache: FwdCache) -> dict:
-    _sum = sum
-    _rD = range(N_EMBED)
-    _rn = range(len(cache.input_ids))
-
+    n = len(cache.input_ids)
     inv_sum_mask = 1.0 / cache.sum_mask
     probs, target_ids, loss_mask, x = cache.probs, cache.target_ids, cache.loss_mask, cache.x
 
     lm_head = params["lm_head"]
-    vocab_size = len(lm_head)
-    _rV = range(vocab_size)
-
-    dlogits = [[(p * inv_sum_mask) * loss_mask[i] for p in probs[i]] for i in _rn]
-    for i in _rn:
+    dlogits = [[(p * inv_sum_mask) * loss_mask[i] for p in probs[i]] for i in range(n)]
+    for i in range(n):
         dlogits[i][target_ids[i]] -= inv_sum_mask * loss_mask[i]
 
-    dlm_head = [[0.0] * N_EMBED for _ in _rV]
-    for j in _rV:
-        dlm_j = dlm_head[j]
-        for d in _rD:
-            val = 0.0
-            for i in _rn:
-                val += dlogits[i][j] * x[i][d]
-            dlm_j[d] = val
-
-    dx = [[0.0] * N_EMBED for _ in _rn]
-    for i in _rn:
-        dlogits_i, dx_i = dlogits[i], dx[i]
-        for d in _rD:
-            val = 0.0
-            for j in _rV:
-                val += dlogits_i[j] * lm_head[j][d]
-            dx_i[d] = val
+    dlm_head = linear_bwd_w(dlogits, x)  # (vocab_size, N_EMBED)
+    dx = linear_bwd_x(dlogits, lm_head)  # (n, N_EMBED)
 
     grads = {k: [[0.0] * len(mat[0]) for _ in mat] for k, mat in params.items()}
     grads["lm_head"] = dlm_head
@@ -404,10 +312,10 @@ def backward(params: dict, cache: FwdCache) -> dict:
 
     demb = rmsnorm_bwd(dx, cache.emb, cache.rms_init)
     gwte, gwpe = grads["wte"], grads["wpe"]
-    for i in _rn:
+    for i in range(n):
         tid, demb_i = cache.input_ids[i], demb[i]
         gwte_i, gwpe_i = gwte[tid], gwpe[i]
-        for j in _rD:
+        for j in range(N_EMBED):
             d = demb_i[j]
             gwte_i[j] += d
             gwpe_i[j] += d
@@ -425,7 +333,6 @@ def step_fn(params: dict, opt_state: dict, input_ids: list[int], target_ids: lis
     inv_bias2 = 1.0 / (1 - beta2 ** (step + 1))
     lr_scaled = lr * inv_bias1
     one_minus_b1, one_minus_b2 = 1 - beta1, 1 - beta2
-    _pow = pow
 
     m, v = opt_state["m"], opt_state["v"]
 
@@ -438,7 +345,7 @@ def step_fn(params: dict, opt_state: dict, input_ids: list[int], target_ids: lis
                 g = g_i[j]
                 m_ij = beta1 * m_i[j] + one_minus_b1 * g
                 v_ij = beta2 * v_i[j] + one_minus_b2 * g * g
-                p_i[j] -= lr_scaled * m_ij / (_pow(v_ij * inv_bias2, 0.5) + eps)
+                p_i[j] -= lr_scaled * m_ij / ((v_ij * inv_bias2) ** 0.5 + eps)
                 m_i[j] = m_ij
                 v_i[j] = v_ij
 
