@@ -14,12 +14,10 @@ WEIGHTS_PATH = Path(__file__).parent / "weights.json"
 
 
 def dump_weights(state_dict) -> None:
-    # serialize extracted weights to JSON file
     WEIGHTS_PATH.write_text(json.dumps({k: [[v.data for v in row] for row in mat] for k, mat in state_dict.items()}))
 
 
 def assert_weights_match(state_dict, atol: float = 1e-5) -> None:
-    # assert cur == ref element-wise within atol. report worst violation on failure
     assert WEIGHTS_PATH.exists(), f"weights file not found: {WEIGHTS_PATH}"
 
     ref = json.load(open(WEIGHTS_PATH))
@@ -35,7 +33,7 @@ def assert_weights_match(state_dict, atol: float = 1e-5) -> None:
     total = 0
     rows = ((k, i, rr, cr) for k in ref for i, (rr, cr) in enumerate(zip(ref[k], cur[k])))
     all_cells = itertools.chain.from_iterable(((k, i, j, r, c) for j, (r, c) in enumerate(zip(rr, cr))) for k, i, rr, cr in rows)
-    for k, i, j, r, c in all_cells:  # key, row, col, ref val, cur val
+    for k, i, j, r, c in all_cells:
         d = abs(r - c)
         total += 1
         violations += d > atol
@@ -49,7 +47,7 @@ def print_times(path: Path) -> None:
     if not path.exists():
         return
     with open(path, "r") as f:
-        times = [float(row["time_ms"]) for row in csv.DictReader(f)]
+        times = [float(row["time_ms"]) * 1000 for row in csv.DictReader(f)]
     if not times:
         return
     n = len(times)
@@ -57,8 +55,8 @@ def print_times(path: Path) -> None:
     variance = sum((x - mean) ** 2 for x in times) / (n - 1) if n > 1 else 0
     stddev = math.sqrt(variance)
     print(f"'{path.stem}'")
-    print(f"  Time (mean \u00b1 \u03c3):    {mean:8.3f} ms \u00b1 {stddev:8.3f} ms    [User: 0.0 ms, System: 0.0 ms]")
-    print(f"  Range (min \u2026 max):  {min(times):8.3f} ms \u2026 {max(times):8.3f} ms    {n} runs")
+    print(f"  Time (mean \u00b1 \u03c3):    {mean:8.0f} \u03bcs \u00b1 {stddev:8.0f} \u03bcs    [User: 0 \u03bcs, System: 0 \u03bcs]")
+    print(f"  Range (min \u2026 max):  {min(times):8.0f} \u03bcs \u2026 {max(times):8.0f} \u03bcs    {n} runs")
     print()
 
 
@@ -85,7 +83,7 @@ def print_times_all() -> None:
         print_times(times_dir / f"{name}.csv")
 
     chart_data = Data([[m * 1000] for _, m in entries], [e[0] for e in entries])
-    chart_args = Args(title="mean train step time [us]", width=60, format="{:.1f}", space_between=True)
+    chart_args = Args(title="mean train step time [\u03bcs]", width=60, format="{:.0f}", space_between=True)
     BarChart(chart_data, chart_args).draw()
 
 
