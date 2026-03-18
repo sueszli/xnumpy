@@ -3,7 +3,6 @@
 # dependencies = ["tqdm"]
 # ///
 
-import functools
 import math
 import random
 import time
@@ -347,13 +346,8 @@ def step_fn(params, opt_state, input_ids, target_ids, loss_mask, step):
     return loss, new_params, {"m": new_m, "v": new_v}
 
 
-@functools.cache
-def char_to_id(uchars_tuple: tuple[str, ...]) -> dict[str, int]:
-    return {ch: i for i, ch in enumerate(uchars_tuple)}
-
-
 def tokenize(doc: str, uchars: list[str]) -> tuple[list[int], list[int], list[float]]:
-    c2i = char_to_id(tuple(uchars))
+    c2i = {ch: i for i, ch in enumerate(uchars)}
     bos = len(uchars)
     tokens = [bos] + [c2i[ch] for ch in doc] + [bos]
     n = min(BLOCK_SIZE, len(tokens) - 1)

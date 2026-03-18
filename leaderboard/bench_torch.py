@@ -5,7 +5,6 @@
 
 import random
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -45,12 +44,26 @@ def forward(params: dict[str, torch.Tensor], input_ids: torch.Tensor, target_ids
 
 
 @torch.compile
-def train_step(params: dict[str, torch.Tensor], m: dict[str, torch.Tensor], v: dict[str, torch.Tensor], lr: torch.Tensor, bc1: torch.Tensor, bc2: torch.Tensor, input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor) -> tuple:
+def step_fn(params: dict[str, torch.Tensor], opt_state: dict[str, dict[str, torch.Tensor]], input_ids: torch.Tensor, target_ids: torch.Tensor, loss_mask: torch.Tensor, step: torch.Tensor) -> tuple:
+    m = opt_state["m"]
+    v = opt_state["v"]
     grads, loss = torch.func.grad_and_value(forward)(params, input_ids, target_ids, loss_mask)
-    new_m = {k: 0.85 * m[k] + 0.15 * grads[k] for k in params}
-    new_v = {k: 0.99 * v[k] + 0.01 * grads[k].pow(2) for k in params}
-    new_params = {k: params[k] - lr * (new_m[k] / bc1) / ((new_v[k] / bc2).sqrt() + 1e-8) for k in params}
-    return new_params, new_m, new_v, loss
+
+    lr = 0.01 * (1 - step / NUM_STEPS)
+    bc1 = 1 - 0.85 ** (step + 1)
+    bc2 = 1 - 0.99 ** (step + 1)
+
+    new_opt_state = {"m": {}, "v": {}}
+    new_params = {}
+
+    for k in params:
+        new_m = 0.85 * m[k] + 0.15 * grads[k]
+        new_v = 0.99 * v[k] + 0.01 * grads[k].pow(2)
+        new_opt_state["m"][k] = new_m
+        new_opt_state["v"][k] = new_v
+        new_params[k] = params[k] - lr * (new_m / bc1) / ((new_v / bc2).sqrt() + 1e-8)
+
+    return loss, new_params, new_opt_state
 
 
 def tokenize(docs: list[str], uchars: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -91,33 +104,20 @@ state_dict: dict[str, torch.Tensor] = {
     **{f"layer{i}.mlp_fc2": matrix(N_EMBED, 4 * N_EMBED) for i in range(N_LAYER)},
 }
 
+opt_state = {
+    "m": {k: torch.zeros_like(v) for k, v in state_dict.items()},
+    "v": {k: torch.zeros_like(v) for k, v in state_dict.items()},
+}
+
 train_inputs, train_targets, train_masks = tokenize(docs, uchars)
 
-
-@dataclass
-class Adam:
-    m: dict[str, torch.Tensor]
-    v: dict[str, torch.Tensor]
-    lrs: torch.Tensor
-    bc1s: torch.Tensor
-    bc2s: torch.Tensor
-
-
-opt = Adam(
-    m={k: torch.zeros_like(v) for k, v in state_dict.items()},
-    v={k: torch.zeros_like(v) for k, v in state_dict.items()},
-    lrs=torch.tensor([0.01 * (1 - step / NUM_STEPS) for step in range(NUM_STEPS)], dtype=torch.float64),
-    bc1s=torch.tensor([1 - 0.85 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64),
-    bc2s=torch.tensor([1 - 0.99 ** (step + 1) for step in range(NUM_STEPS)], dtype=torch.float64),
-)
-
 # precompile
-train_step(state_dict, opt.m, opt.v, opt.lrs[0], opt.bc1s[0], opt.bc2s[0], train_inputs[0], train_targets[0], train_masks[0])
+step_fn(state_dict, opt_state, train_inputs[0], train_targets[0], train_masks[0], torch.tensor(0, dtype=torch.float64))
 
 step_times = []
 for step in range(NUM_STEPS):
     t0 = time.perf_counter()
-    state_dict, opt.m, opt.v, loss = train_step(state_dict, opt.m, opt.v, opt.lrs[step], opt.bc1s[step], opt.bc2s[step], train_inputs[step], train_targets[step], train_masks[step])
+    loss, state_dict, opt_state = step_fn(state_dict, opt_state, train_inputs[step], train_targets[step], train_masks[step], torch.tensor(step, dtype=torch.float64))
     step_times.append(time.perf_counter() - t0)
     print(f"step {step+1:4d} / {NUM_STEPS:4d} | loss {loss.item():.4f}", end="\r")
 
