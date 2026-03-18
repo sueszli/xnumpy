@@ -4,16 +4,14 @@
 # ///
 
 import math
-import operator
 import random
 import time
 from collections import namedtuple
+from operator import mul
 from pathlib import Path
 
 from tqdm import tqdm
 from utils import assert_weights_match, save_times
-
-_mul = operator.mul
 
 random.seed(42)
 
@@ -35,7 +33,7 @@ def rmsnorm_fwd(x: list[list[float]]) -> tuple[list[list[float]], list[float]]:
     rms = [0.0] * n
     for i in range(n):
         row = x[i]
-        scale = (sum(map(_mul, row, row)) * inv_d + 1e-5) ** -0.5
+        scale = (sum(map(mul, row, row)) * inv_d + 1e-5) ** -0.5
         rms[i] = scale
         out_i = out[i]
         for j in range(d):
@@ -49,7 +47,7 @@ def rmsnorm_bwd(dout: list[list[float]], x: list[list[float]], rms: list[float])
     for i in range(n):
         do, row, scale = dout[i], x[i], rms[i]
         scale3_over_d = (scale**3) / d
-        dot = sum(map(_mul, do, row))
+        dot = sum(map(mul, do, row))
         dx_i = dx[i]
         for j in range(d):
             dx_i[j] = do[j] * scale - scale3_over_d * row[j] * dot
@@ -82,9 +80,9 @@ def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[fl
         for j in _rD:
             wq_j, wk_j, wv_j = wq[j], wk[j], wv[j]
             h_idx, d_idx = j // head_dim, j % head_dim
-            q[h_idx][i][d_idx] = _sum(map(_mul, xn_i, wq_j))
-            k[h_idx][i][d_idx] = _sum(map(_mul, xn_i, wk_j))
-            v[h_idx][i][d_idx] = _sum(map(_mul, xn_i, wv_j))
+            q[h_idx][i][d_idx] = _sum(map(mul, xn_i, wq_j))
+            k[h_idx][i][d_idx] = _sum(map(mul, xn_i, wk_j))
+            v[h_idx][i][d_idx] = _sum(map(mul, xn_i, wv_j))
 
     inv_scale = 1.0 / head_dim**0.5
     attn_w = [[[0.0] * n for _ in range(n)] for _ in range(N_HEAD)]
@@ -94,7 +92,7 @@ def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[fl
         h_off = h * head_dim
         for i in range(n):
             q_h_i = q_h[i]
-            qk_i = [_sum(map(_mul, q_h_i, k_h[j])) * inv_scale if j <= i else -1e10 for j in range(n)]
+            qk_i = [_sum(map(mul, q_h_i, k_h[j])) * inv_scale if j <= i else -1e10 for j in range(n)]
             max_val = max(qk_i)
             exps = [_exp(v - max_val) for v in qk_i]
             total = _sum(exps)
@@ -126,7 +124,7 @@ def layer_fwd(x: list[list[float]], params: dict, li: int) -> tuple[list[list[fl
     for i in range(n):
         xn_i, hp_i, hv_i = xn_mlp[i], h_pre[i], h_val[i]
         for j in _rM:
-            val = _sum(map(_mul, xn_i, fc1[j]))
+            val = _sum(map(mul, xn_i, fc1[j]))
             hp_i[j] = val
             hv_i[j] = val if val > 0.0 else 0.0
 
@@ -253,7 +251,7 @@ def layer_bwd(dx: list[list[float]], params: dict, cache: LayerCache, li: int) -
         aw_h, daw_h, dla_h = attn_w_cache[h], dattn_w[h], dlogits_attn[h]
         for i in range(n):
             aw_i, daw_i = aw_h[i], daw_h[i]
-            s = _sum(map(_mul, daw_i, aw_i))
+            s = _sum(map(mul, daw_i, aw_i))
             dla_i = dla_h[i]
             for j in range(n):
                 dla_i[j] = aw_i[j] * (daw_i[j] - s) * inv_scale
@@ -349,7 +347,7 @@ def forward(params: dict, input_ids: list[int], target_ids: list[int], loss_mask
     probs = []
     for i in _rn:
         x_i = x[i]
-        logits_i = [_sum(map(_mul, x_i, lm_head[j])) for j in _rV]
+        logits_i = [_sum(map(mul, x_i, lm_head[j])) for j in _rV]
         max_val = max(logits_i)
         exps = [_exp(v - max_val) for v in logits_i]
         total = _sum(exps)
