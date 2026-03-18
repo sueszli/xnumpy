@@ -1,6 +1,5 @@
 # /// script
 # requires-python = "==3.14.*"
-# dependencies = ["tqdm"]
 # ///
 
 import math
@@ -9,7 +8,6 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from tqdm import tqdm
 from utils import assert_weights_match, save_times
 
 random.seed(42)
@@ -383,7 +381,7 @@ state_dict = {
 
 opt_state = {"m": {k: [[0.0] * len(mat[0]) for _ in mat] for k, mat in state_dict.items()}, "v": {k: [[0.0] * len(mat[0]) for _ in mat] for k, mat in state_dict.items()}}
 
-tokenized = [tokenize(doc, uchars) for doc in tqdm(docs, desc="tokenizing")]
+tokenized = [tokenize(doc, uchars) for doc in docs]
 
 step_times = []
 for step in range(NUM_STEPS):
