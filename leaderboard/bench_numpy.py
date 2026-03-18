@@ -1,6 +1,6 @@
 # /// script
 # requires-python = "==3.14.*"
-# dependencies = ["numpy", "tqdm"]
+# dependencies = ["numpy"]
 # ///
 
 import functools
@@ -212,7 +212,7 @@ state_dict = {
 
 opt_state = {"m": {k: np.zeros_like(p) for k, p in state_dict.items()}, "v": {k: np.zeros_like(p) for k, p in state_dict.items()}}
 
-tokenized = [tokenize(doc, uchars) for doc in tqdm(docs, desc="tokenizing")]
+tokenized = [tokenize(doc, uchars) for doc in docs]
 
 step_times = []
 for step in range(NUM_STEPS):
