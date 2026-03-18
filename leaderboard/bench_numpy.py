@@ -195,7 +195,7 @@ state_dict = {
 
 PARAM_KEYS = list(state_dict.keys())
 flat_params = np.concatenate([state_dict[k].ravel() for k in PARAM_KEYS])
-TOTAL_PARAMS = flat_params.size
+total_params = flat_params.size
 offset = 0
 for k in PARAM_KEYS:
     n = state_dict[k].size
@@ -203,11 +203,11 @@ for k in PARAM_KEYS:
     offset += n
 
 opt_state = {
-    "flat_m": np.zeros(TOTAL_PARAMS),
-    "flat_v": np.zeros(TOTAL_PARAMS),
+    "flat_m": np.zeros(total_params),
+    "flat_v": np.zeros(total_params),
     "flat_params": flat_params,
-    "buf": np.empty(TOTAL_PARAMS),
-    "tmp": np.empty(TOTAL_PARAMS),
+    "buf": np.empty(total_params),
+    "tmp": np.empty(total_params),
 }
 
 tokenized = [tokenize(doc, uchars) for doc in docs]
