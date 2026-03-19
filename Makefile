@@ -20,7 +20,6 @@ fmt:
 .PHONY: benchmark
 benchmark:
 	uv run python benchmarks/run.py
-	chmod +x leaderboard/run.sh && ./leaderboard/run.sh
 
 .PHONY: precommit
 precommit: fmt tests benchmark

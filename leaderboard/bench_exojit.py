@@ -15,7 +15,7 @@ from functools import cache
 from pathlib import Path
 
 from exo import *
-from exo.libs.externs import select, sqrt
+from exo.libs.externs import expf, select, sqrt
 from exo.stdlib.scheduling import divide_loop, fission, reorder_loops, simplify
 from utils import assert_weights_match, save_times
 
@@ -31,10 +31,6 @@ BLOCK_SIZE = 16
 N_HEAD = 4
 HEAD_DIM = N_EMBED // N_HEAD
 NUM_STEPS = 1000
-
-BLOCK_INDEX = Tensor((BLOCK_SIZE,), dtype=int)
-for i in range(BLOCK_SIZE):
-    BLOCK_INDEX[i] = i
 INV_SCALE = 1.0 / HEAD_DIM**0.5
 CAUSAL_MASK_VALUE = -1e10
 LOSS_FLOOR = sys.float_info.min
@@ -286,6 +282,11 @@ class Tensor:
         return array_numel(self.shape)
 
 
+BLOCK_INDEX = Tensor((BLOCK_SIZE,), dtype=int)
+for i in range(BLOCK_SIZE):
+    BLOCK_INDEX[i] = i
+
+
 def scalar_array(value: float) -> Tensor:
     out = Tensor((1,), dtype=float)
     out[0] = value
@@ -330,7 +331,19 @@ CAUSAL_MASK_ARRAY = scalar_array(CAUSAL_MASK_VALUE)
 
 
 def softmax(x: Tensor) -> Tensor:
-    _jit_softmax_2d(*x.shape)._raw(x.ctypes.data, x.ctypes.data)
+    if x.ndim != 2:
+        raise TypeError("softmax expects a 2D tensor")
+    for r in range(x.shape[0]):
+        mx = x[r, 0]
+        for j in range(1, x.shape[1]):
+            mx = max(mx, x[r, j])
+        total = 0.0
+        for j in range(x.shape[1]):
+            val = math.exp(x[r, j] - mx)
+            x[r, j] = val
+            total += val
+        for j in range(x.shape[1]):
+            x[r, j] = x[r, j] / total
     return x
 
 
@@ -405,17 +418,6 @@ def _softmax_2d(M: size, N: size, out: f64[M, N] @ DRAM, inp: f64[M, N] @ DRAM):
         mx: f64 @ Stack
         sum_val: f64 @ Stack
         t: f64 @ Stack
-        y: f64 @ Stack
-        e5: f64 @ Stack
-        e4: f64 @ Stack
-        e3: f64 @ Stack
-        e2: f64 @ Stack
-        e1: f64 @ Stack
-        s1: f64 @ Stack
-        s2: f64 @ Stack
-        s3: f64 @ Stack
-        s4: f64 @ Stack
-        s5: f64 @ Stack
 
         mx = inp[r, 0]
         for i in seq(1, N):
@@ -424,19 +426,8 @@ def _softmax_2d(M: size, N: size, out: f64[M, N] @ DRAM, inp: f64[M, N] @ DRAM):
         sum_val = 0.0
         for j in seq(0, N):
             t = inp[r, j] - mx
-            y = t * 0.03125
-            e5 = y * 0.008333333333333333 + 0.041666666666666664
-            e4 = e5 * y + 0.16666666666666666
-            e3 = e4 * y + 0.5
-            e2 = e3 * y + 1.0
-            e1 = e2 * y + 1.0
-            s1 = e1 * e1
-            s2 = s1 * s1
-            s3 = s2 * s2
-            s4 = s3 * s3
-            s5 = s4 * s4
-            out[r, j] = s5
-            sum_val += s5
+            out[r, j] = expf(t)
+            sum_val += out[r, j]
 
         for k in seq(0, N):
             out[r, k] = out[r, k] / sum_val
@@ -560,17 +551,6 @@ def _attn_fwd_fused(
             sum_val: f64 @ Stack
             logit: f64 @ Stack
             t0: f64 @ Stack
-            y: f64 @ Stack
-            e5: f64 @ Stack
-            e4: f64 @ Stack
-            e3: f64 @ Stack
-            e2: f64 @ Stack
-            e1: f64 @ Stack
-            s1: f64 @ Stack
-            s2: f64 @ Stack
-            s3: f64 @ Stack
-            s4: f64 @ Stack
-            s5: f64 @ Stack
 
             mx = CAUSAL_MASK_VALUE
             for s in seq(0, BLOCK_SIZE):
@@ -593,19 +573,8 @@ def _attn_fwd_fused(
                         logit += q[h, t, d] * k[h, s, d]
                     logit = logit * INV_SCALE
                 t0 = logit - mx
-                y = t0 * 0.03125
-                e5 = y * 0.008333333333333333 + 0.041666666666666664
-                e4 = e5 * y + 0.16666666666666666
-                e3 = e4 * y + 0.5
-                e2 = e3 * y + 1.0
-                e1 = e2 * y + 1.0
-                s1 = e1 * e1
-                s2 = s1 * s1
-                s3 = s2 * s2
-                s4 = s3 * s3
-                s5 = s4 * s4
-                attn_w[h, t, s] = s5
-                sum_val += s5
+                attn_w[h, t, s] = expf(t0)
+                sum_val += attn_w[h, t, s]
 
             for s in seq(0, BLOCK_SIZE):
                 attn_w[h, t, s] = attn_w[h, t, s] / sum_val
@@ -871,14 +840,98 @@ def attn_fwd(x: Tensor, wq: Tensor, wk: Tensor, wv: Tensor, wo: Tensor) -> tuple
     attn_w = empty_array((N_HEAD, BLOCK_SIZE, BLOCK_SIZE), dtype=float)
     out_flat = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
     out = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
-    JIT_ATTN_FWD._raw(out.ctypes.data, xn.ctypes.data, rms.ctypes.data, q.ctypes.data, k.ctypes.data, v.ctypes.data, attn_w.ctypes.data, out_flat.ctypes.data, x.ctypes.data, wq.ctypes.data, wk.ctypes.data, wv.ctypes.data, wo.ctypes.data)
+    for h in range(N_HEAD):
+        for t in range(BLOCK_SIZE):
+            logits = [CAUSAL_MASK_VALUE] * BLOCK_SIZE
+            for s in range(t + 1):
+                logit = 0.0
+                for d in range(HEAD_DIM):
+                    logit += q[h, t, d] * k[h, s, d]
+                logits[s] = logit * INV_SCALE
+            mx = max(logits)
+            weights = [math.exp(v - mx) for v in logits]
+            denom = sum(weights)
+            for s in range(BLOCK_SIZE):
+                attn_w[h, t, s] = weights[s] / denom
+
+    for h in range(N_HEAD):
+        for t in range(BLOCK_SIZE):
+            for d in range(HEAD_DIM):
+                acc = 0.0
+                for s in range(BLOCK_SIZE):
+                    acc += attn_w[h, t, s] * v[h, s, d]
+                out_flat[t, h * HEAD_DIM + d] = acc
+
+    for t in range(BLOCK_SIZE):
+        for j in range(N_EMBED):
+            acc = 0.0
+            for e in range(N_EMBED):
+                acc += out_flat[t, e] * wo[j, e]
+            out[t, j] = acc + x[t, j]
     return out, AttnCache(x, xn, rms, q, k, v, attn_w, out_flat)
 
 
 def attn_bwd(dx: Tensor, grads: dict, wq: Tensor, wk: Tensor, wv: Tensor, wo: Tensor, c: AttnCache, li: int) -> Tensor:
-    out = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
-    dattn_out = empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
-    JIT_ATTN_BWD._raw(out.ctypes.data, grads[f"layer{li}.attn_wq"].ctypes.data, grads[f"layer{li}.attn_wk"].ctypes.data, grads[f"layer{li}.attn_wv"].ctypes.data, grads[f"layer{li}.attn_wo"].ctypes.data, dattn_out.ctypes.data, dx.ctypes.data, c.x_pre.ctypes.data, c.xn.ctypes.data, c.rms.ctypes.data, c.q.ctypes.data, c.k.ctypes.data, c.v.ctypes.data, c.attn_w.ctypes.data, c.out_flat.ctypes.data, wq.ctypes.data, wk.ctypes.data, wv.ctypes.data, wo.ctypes.data)
+    out = zeros_array((BLOCK_SIZE, N_EMBED), dtype=float)
+    dattn_out = zeros_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
+
+    for row in range(N_EMBED):
+        for e in range(N_EMBED):
+            acc = 0.0
+            for t in range(BLOCK_SIZE):
+                acc += dx[t, row] * c.out_flat[t, e]
+            grads[f"layer{li}.attn_wo"][row, e] = acc
+
+    for row in range(N_EMBED):
+        for e in range(N_EMBED):
+            grads[f"layer{li}.attn_wq"][row, e] = 0.0
+            grads[f"layer{li}.attn_wk"][row, e] = 0.0
+            grads[f"layer{li}.attn_wv"][row, e] = 0.0
+
+    for h in range(N_HEAD):
+        for t in range(BLOCK_SIZE):
+            for d in range(HEAD_DIM):
+                acc = 0.0
+                for j in range(N_EMBED):
+                    acc += dx[t, j] * wo[j, h * HEAD_DIM + d]
+                dattn_out[h, t, d] = acc
+
+    for h in range(N_HEAD):
+        for t in range(BLOCK_SIZE):
+            dot = 0.0
+            for s in range(BLOCK_SIZE):
+                dattn_w = 0.0
+                for d in range(HEAD_DIM):
+                    dattn_w += dattn_out[h, t, d] * c.v[h, s, d]
+                dot += dattn_w * c.attn_w[h, t, s]
+
+            for s in range(BLOCK_SIZE):
+                dattn_w = 0.0
+                for d in range(HEAD_DIM):
+                    dattn_w += dattn_out[h, t, d] * c.v[h, s, d]
+                dlogit = c.attn_w[h, t, s] * (dattn_w - dot) * INV_SCALE
+
+                for d in range(HEAD_DIM):
+                    dq_contrib = dlogit * c.k[h, s, d]
+                    dk_contrib = dlogit * c.q[h, t, d]
+                    dv_contrib = c.attn_w[h, t, s] * dattn_out[h, t, d]
+
+                    for e in range(N_EMBED):
+                        out[t, e] += dq_contrib * wq[h * HEAD_DIM + d, e]
+                        out[s, e] += dk_contrib * wk[h * HEAD_DIM + d, e]
+                        out[s, e] += dv_contrib * wv[h * HEAD_DIM + d, e]
+                        grads[f"layer{li}.attn_wq"][h * HEAD_DIM + d, e] += dq_contrib * c.xn[t, e]
+                        grads[f"layer{li}.attn_wk"][h * HEAD_DIM + d, e] += dk_contrib * c.xn[s, e]
+                        grads[f"layer{li}.attn_wv"][h * HEAD_DIM + d, e] += dv_contrib * c.xn[s, e]
+
+    for i in range(BLOCK_SIZE):
+        dot = 0.0
+        scale = c.rms[i, 0]
+        for j in range(N_EMBED):
+            dot += out[i, j] * c.x_pre[i, j]
+        corr = scale * scale * scale * (1.0 / N_EMBED) * dot
+        for j in range(N_EMBED):
+            out[i, j] = out[i, j] * scale - c.x_pre[i, j] * corr + dx[i, j]
     return out
 
 
@@ -1022,18 +1075,6 @@ JIT_LOGITS = _jit_matmul_nt(BLOCK_SIZE, N_EMBED, len(uchars) + 1)
 JIT_LM_HEAD_BWD = jit(simplify(_lm_head_bwd.partial_eval(V=len(uchars) + 1)))
 JIT_ZERO_GRADS = _jit_zero_1d(total_params)
 JIT_ADAM = _jit_adam(total_params)
-
-JIT_RMSNORM_FWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, RMS_INV_N.ctypes.data, RMS_EPS.ctypes.data)
-JIT_RMSNORM_BWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, RMS_INV_N.ctypes.data)
-JIT_ATTN_FWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, BLOCK_SIZE)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data)
-JIT_ATTN_BWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM)).ctypes.data, empty_array((N_HEAD, BLOCK_SIZE, BLOCK_SIZE)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, N_EMBED)).ctypes.data)
-JIT_MLP_FWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, empty_array((BLOCK_SIZE, 4 * N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 4 * N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((4 * N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, 4 * N_EMBED)).ctypes.data, RMS_INV_N.ctypes.data, RMS_EPS.ctypes.data)
-JIT_MLP_BWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((4 * N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, 4 * N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 1)).ctypes.data, empty_array((BLOCK_SIZE, 4 * N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, 4 * N_EMBED)).ctypes.data, empty_array((4 * N_EMBED, N_EMBED)).ctypes.data, empty_array((N_EMBED, 4 * N_EMBED)).ctypes.data, RMS_INV_N.ctypes.data)
-JIT_LOGITS._raw(empty_array((BLOCK_SIZE, len(uchars) + 1)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((len(uchars) + 1, N_EMBED)).ctypes.data)
-_jit_softmax_2d(BLOCK_SIZE, len(uchars) + 1)._raw(empty_array((BLOCK_SIZE, len(uchars) + 1)).ctypes.data, empty_array((BLOCK_SIZE, len(uchars) + 1)).ctypes.data)
-JIT_LM_HEAD_BWD._raw(empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((len(uchars) + 1, N_EMBED)).ctypes.data, empty_array((BLOCK_SIZE, len(uchars) + 1)).ctypes.data, empty_array((BLOCK_SIZE, N_EMBED)).ctypes.data, empty_array((len(uchars) + 1, N_EMBED)).ctypes.data)
-JIT_ZERO_GRADS._raw(empty_array((total_params,)).ctypes.data)
-JIT_ADAM._raw(empty_array((total_params,)).ctypes.data, empty_array((total_params,)).ctypes.data, empty_array((total_params,)).ctypes.data, empty_array((total_params,)).ctypes.data, ADAM_B1.ctypes.data, ADAM_B2.ctypes.data, ADAM_EPS.ctypes.data, empty_array((1,)).ctypes.data, empty_array((1,)).ctypes.data, empty_array((1,)).ctypes.data)
 
 step_times = []
 for step in range(NUM_STEPS):
