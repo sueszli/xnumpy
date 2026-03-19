@@ -62,7 +62,7 @@ def _ctype_for_dtype(dtype):
     if dtype is float:
         return ctypes.c_double
     if dtype is int:
-        return ctypes.c_int64
+        return ctypes.c_int32
     raise TypeError(f"unsupported dtype: {dtype!r}")
 
 
@@ -350,6 +350,25 @@ def gather_add_rows(src: Tensor, row_ids: Tensor, addend: Tensor) -> Tensor:
     return out
 
 
+def gather_add_rows_into(src: Tensor, row_ids: Tensor, addend: Tensor, out: Tensor) -> Tensor:
+    if src.ndim != 2 or row_ids.ndim != 1 or addend.ndim != 2 or out.ndim != 2:
+        raise TypeError("gather_add_rows_into expects 2D source/addend/out and 1D row ids")
+    if out.shape != (row_ids.shape[0], src.shape[1]) or addend.shape != out.shape:
+        raise ValueError("shape mismatch in gather_add_rows_into")
+    rows = row_ids.shape[0]
+    cols = src.shape[1]
+    row_bytes = cols * ctypes.sizeof(src._ctype)
+    for i in range(rows):
+        row = int(row_ids._buf[row_ids._offset + i * row_ids._strides[0]])
+        src_off = src.ctypes.data + row * row_bytes
+        add_off = addend.ctypes.data + i * row_bytes
+        out_off = out.ctypes.data + i * row_bytes
+        ctypes.memmove(out_off, src_off, row_bytes)
+        for j in range(cols):
+            out._buf[out._offset + i * cols + j] += addend._buf[addend._offset + i * cols + j]
+    return out
+
+
 def add_tensors(a: Tensor, b: Tensor) -> Tensor:
     if a.shape != b.shape or a.dtype != b.dtype:
         raise ValueError("shape mismatch in add_tensors")
@@ -381,6 +400,15 @@ def add_tensor_inplace(dst: Tensor, src: Tensor) -> None:
     s_base = src._offset
     for i in range(n):
         dst._buf[d_base + i] += src._buf[s_base + i]
+
+
+def sum_1d(x: Tensor) -> float:
+    total = 0.0
+    base = x._offset
+    stride = x._strides[0]
+    for i in range(x.shape[0]):
+        total += x._buf[base + i * stride]
+    return total
 
 
 def subtract_target_logprobs_inplace(dlogits: Tensor, target_ids: Tensor, inv_sum_mask: float) -> None:
@@ -453,6 +481,15 @@ def _matmul_nt(M: size, K: size, N: size, out: f64[M, N] @ DRAM, a: f64[M, K] @ 
                 out[i, j] += a[i, k] * b[j, k]
 
 
+@proc
+def _matmul_nt_colpar(M: size, K: size, N: size, out: f64[M, N] @ DRAM, a: f64[M, K] @ DRAM, b: f64[N, K] @ DRAM):
+    for j in par(0, N):
+        for i in seq(0, M):
+            out[i, j] = 0.0
+            for k in seq(0, K):
+                out[i, j] += a[i, k] * b[j, k]
+
+
 def _schedule_matmul(p, k: int, n: int):
     p = fission(p, p.find("for k in _: _").before(), n_lifts=2)
     p = reorder_loops(p, "j k")
@@ -470,6 +507,11 @@ def _schedule_matmul(p, k: int, n: int):
 @cache
 def _jit_matmul_nt(m: int, k: int, n: int):
     return jit(_schedule_matmul(_matmul_nt.partial_eval(M=m, K=k, N=n), k, n))
+
+
+@cache
+def _jit_matmul_nt_colpar(m: int, k: int, n: int):
+    return jit(simplify(_matmul_nt_colpar.partial_eval(M=m, K=k, N=n)))
 
 
 def matmul_nt(a: Tensor, b: Tensor, out: Tensor) -> Tensor:
@@ -542,9 +584,12 @@ def _jit_zero_1d(n: int):
 
 def cross_entropy_loss(probs: Tensor, target_ids: Tensor, loss_mask: Tensor, sum_mask: float) -> float:
     total = 0.0
+    cols = probs.shape[1]
     for i in range(BLOCK_SIZE):
-        if loss_mask[i] != 0:
-            value = probs[i, int(target_ids[i])]
+        mask = loss_mask._buf[loss_mask._offset + i * loss_mask._strides[0]]
+        if mask != 0:
+            target = int(target_ids._buf[target_ids._offset + i * target_ids._strides[0]])
+            value = probs._buf[probs._offset + i * cols + target]
             total += math.log(max(LOSS_FLOOR, min(value, 1.0)))
     return float(-total / sum_mask)
 
@@ -658,18 +703,12 @@ def _attn_fwd_fused(
                     for d in seq(0, HEAD_DIM):
                         logit += q[h, t, d] * k[h, s, d]
                     logit = logit * INV_SCALE
-                mx = select(mx, logit, logit, mx)
+                attn_w[h, t, s] = logit
+                mx = select(mx, attn_w[h, t, s], attn_w[h, t, s], mx)
 
             sum_val = 0.0
             for s in seq(0, BLOCK_SIZE):
-                if s > t:
-                    logit = CAUSAL_MASK_VALUE
-                else:
-                    logit = 0.0
-                    for d in seq(0, HEAD_DIM):
-                        logit += q[h, t, d] * k[h, s, d]
-                    logit = logit * INV_SCALE
-                t0 = logit - mx
+                t0 = attn_w[h, t, s] - mx
                 attn_w[h, t, s] = expf(t0)
                 sum_val += attn_w[h, t, s]
 
@@ -708,7 +747,7 @@ def _attn_av_fwd(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, attn_w: f64[N_HEAD, BLOCK
 
 @proc
 def _mlp_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, h: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM, fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
-    for i in seq(0, BLOCK_SIZE):
+    for i in par(0, BLOCK_SIZE):
         sumsq: f64 @ Stack
         scale: f64 @ Stack
         sumsq = 0.0
@@ -809,6 +848,7 @@ def _adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, 
 
 @proc
 def _attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMBED] @ DRAM, dwk: f64[N_EMBED, N_EMBED] @ DRAM, dwv: f64[N_EMBED, N_EMBED] @ DRAM, dwo: f64[N_EMBED, N_EMBED] @ DRAM, dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM):
+    attn_tmp: f64[BLOCK_SIZE] @ Stack
     for t in seq(0, BLOCK_SIZE):
         for e in seq(0, N_EMBED):
             out[t, e] = 0.0
@@ -845,15 +885,12 @@ def _attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EM
                 dattn_w = 0.0
                 for d in seq(0, HEAD_DIM):
                     dattn_w += dattn_out[h, t, d] * v[h, s, d]
+                attn_tmp[s] = dattn_w
                 dot += dattn_w * attn_w[h, t, s]
 
             for s in seq(0, BLOCK_SIZE):
-                dattn_w: f64 @ Stack
                 dlogit: f64 @ Stack
-                dattn_w = 0.0
-                for d in seq(0, HEAD_DIM):
-                    dattn_w += dattn_out[h, t, d] * v[h, s, d]
-                dlogit = attn_w[h, t, s] * (dattn_w - dot) * INV_SCALE
+                dlogit = attn_w[h, t, s] * (attn_tmp[s] - dot) * INV_SCALE
 
                 for d in seq(0, HEAD_DIM):
                     dq_contrib: f64 @ Stack
@@ -901,6 +938,302 @@ def _lm_head_bwd(V: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[V, N
             for v_idx in seq(0, V):
                 acc += dlogits[t, v_idx] * lm_head[v_idx, e]
             dx[t, e] = acc
+
+
+EMB = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+RMS_INIT = empty_array((BLOCK_SIZE, 1), dtype=float)
+X0 = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+X1 = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+LOGITS = empty_array((BLOCK_SIZE, 1), dtype=float)
+PROBS = empty_array((BLOCK_SIZE, 1), dtype=float)
+ATTN_XN = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+ATTN_RMS = empty_array((BLOCK_SIZE, 1), dtype=float)
+Q = empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
+K = empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
+V_BUF = empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
+ATTN_W = empty_array((N_HEAD, BLOCK_SIZE, BLOCK_SIZE), dtype=float)
+OUT_FLAT = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+MLP_XN = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+MLP_RMS = empty_array((BLOCK_SIZE, 1), dtype=float)
+H_PRE = empty_array((BLOCK_SIZE, 4 * N_EMBED), dtype=float)
+H_BUF = empty_array((BLOCK_SIZE, 4 * N_EMBED), dtype=float)
+DX0 = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+DX1 = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+DX2 = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
+DATTN_OUT = empty_array((N_HEAD, BLOCK_SIZE, HEAD_DIM), dtype=float)
+INV_SUM_MASK = scalar_array(1.0)
+
+
+@proc
+def _train_step(
+    N_PARAMS: size,
+    V: size,
+    input0: size,
+    input1: size,
+    input2: size,
+    input3: size,
+    input4: size,
+    input5: size,
+    input6: size,
+    input7: size,
+    input8: size,
+    input9: size,
+    input10: size,
+    input11: size,
+    input12: size,
+    input13: size,
+    input14: size,
+    input15: size,
+    target0: size,
+    target1: size,
+    target2: size,
+    target3: size,
+    target4: size,
+    target5: size,
+    target6: size,
+    target7: size,
+    target8: size,
+    target9: size,
+    target10: size,
+    target11: size,
+    target12: size,
+    target13: size,
+    target14: size,
+    target15: size,
+    loss_mask: f64[BLOCK_SIZE] @ DRAM,
+    inv_sum_mask: f64[1] @ DRAM,
+    flat_params: f64[N_PARAMS] @ DRAM,
+    flat_grads: f64[N_PARAMS] @ DRAM,
+    flat_m: f64[N_PARAMS] @ DRAM,
+    flat_v: f64[N_PARAMS] @ DRAM,
+    lr: f64[1] @ DRAM,
+    bc1: f64[1] @ DRAM,
+    bc2: f64[1] @ DRAM,
+    rms_inv_n: f64[1] @ DRAM,
+    rms_eps: f64[1] @ DRAM,
+    adam_b1: f64[1] @ DRAM,
+    adam_b2: f64[1] @ DRAM,
+    adam_eps: f64[1] @ DRAM,
+    wte: f64[V, N_EMBED] @ DRAM,
+    wpe: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    lm_head: f64[V, N_EMBED] @ DRAM,
+    attn_wq: f64[N_EMBED, N_EMBED] @ DRAM,
+    attn_wk: f64[N_EMBED, N_EMBED] @ DRAM,
+    attn_wv: f64[N_EMBED, N_EMBED] @ DRAM,
+    attn_wo: f64[N_EMBED, N_EMBED] @ DRAM,
+    mlp_fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM,
+    mlp_fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM,
+    g_wte: f64[V, N_EMBED] @ DRAM,
+    g_wpe: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    g_lm_head: f64[V, N_EMBED] @ DRAM,
+    g_attn_wq: f64[N_EMBED, N_EMBED] @ DRAM,
+    g_attn_wk: f64[N_EMBED, N_EMBED] @ DRAM,
+    g_attn_wv: f64[N_EMBED, N_EMBED] @ DRAM,
+    g_attn_wo: f64[N_EMBED, N_EMBED] @ DRAM,
+    g_mlp_fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM,
+    g_mlp_fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM,
+    emb: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    rms_init: f64[BLOCK_SIZE, 1] @ DRAM,
+    x0: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    x1: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    logits: f64[BLOCK_SIZE, V] @ DRAM,
+    probs: f64[BLOCK_SIZE, V] @ DRAM,
+    attn_xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    attn_rms: f64[BLOCK_SIZE, 1] @ DRAM,
+    q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+    k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+    v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+    attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM,
+    out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    mlp_xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    mlp_rms: f64[BLOCK_SIZE, 1] @ DRAM,
+    h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM,
+    h_buf: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM,
+    dx0: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    dx1: f64[BLOCK_SIZE, N_EMBED] @ DRAM,
+    dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+):
+    assert input0 < V
+    assert input1 < V
+    assert input2 < V
+    assert input3 < V
+    assert input4 < V
+    assert input5 < V
+    assert input6 < V
+    assert input7 < V
+    assert input8 < V
+    assert input9 < V
+    assert input10 < V
+    assert input11 < V
+    assert input12 < V
+    assert input13 < V
+    assert input14 < V
+    assert input15 < V
+    assert target0 < V
+    assert target1 < V
+    assert target2 < V
+    assert target3 < V
+    assert target4 < V
+    assert target5 < V
+    assert target6 < V
+    assert target7 < V
+    assert target8 < V
+    assert target9 < V
+    assert target10 < V
+    assert target11 < V
+    assert target12 < V
+    assert target13 < V
+    assert target14 < V
+    assert target15 < V
+
+    _zero_1d(N_PARAMS, flat_grads)
+
+    for e in seq(0, N_EMBED):
+        emb[0, e] = wte[input0, e] + wpe[0, e]
+        emb[1, e] = wte[input1, e] + wpe[1, e]
+        emb[2, e] = wte[input2, e] + wpe[2, e]
+        emb[3, e] = wte[input3, e] + wpe[3, e]
+        emb[4, e] = wte[input4, e] + wpe[4, e]
+        emb[5, e] = wte[input5, e] + wpe[5, e]
+        emb[6, e] = wte[input6, e] + wpe[6, e]
+        emb[7, e] = wte[input7, e] + wpe[7, e]
+        emb[8, e] = wte[input8, e] + wpe[8, e]
+        emb[9, e] = wte[input9, e] + wpe[9, e]
+        emb[10, e] = wte[input10, e] + wpe[10, e]
+        emb[11, e] = wte[input11, e] + wpe[11, e]
+        emb[12, e] = wte[input12, e] + wpe[12, e]
+        emb[13, e] = wte[input13, e] + wpe[13, e]
+        emb[14, e] = wte[input14, e] + wpe[14, e]
+        emb[15, e] = wte[input15, e] + wpe[15, e]
+
+    _rmsnorm_fwd(BLOCK_SIZE, N_EMBED, x0, rms_init, emb, rms_inv_n, rms_eps)
+    _attn_fwd_fused(x1, attn_xn, attn_rms, q, k, v, attn_w, out_flat, x0, attn_wq, attn_wk, attn_wv, attn_wo)
+    _mlp_fwd_fused(dx0, mlp_xn, mlp_rms, h_pre, h_buf, x1, mlp_fc1, mlp_fc2, rms_inv_n, rms_eps)
+    _matmul_nt(BLOCK_SIZE, N_EMBED, V, logits, dx0, lm_head)
+    _softmax_2d(BLOCK_SIZE, V, probs, logits)
+
+    scale: f64 @ Stack
+    scale = loss_mask[0] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[0, v_idx] = probs[0, v_idx] * scale
+    probs[0, target0] += -inv_sum_mask[0] * loss_mask[0]
+
+    scale = loss_mask[1] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[1, v_idx] = probs[1, v_idx] * scale
+    probs[1, target1] += -inv_sum_mask[0] * loss_mask[1]
+
+    scale = loss_mask[2] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[2, v_idx] = probs[2, v_idx] * scale
+    probs[2, target2] += -inv_sum_mask[0] * loss_mask[2]
+
+    scale = loss_mask[3] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[3, v_idx] = probs[3, v_idx] * scale
+    probs[3, target3] += -inv_sum_mask[0] * loss_mask[3]
+
+    scale = loss_mask[4] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[4, v_idx] = probs[4, v_idx] * scale
+    probs[4, target4] += -inv_sum_mask[0] * loss_mask[4]
+
+    scale = loss_mask[5] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[5, v_idx] = probs[5, v_idx] * scale
+    probs[5, target5] += -inv_sum_mask[0] * loss_mask[5]
+
+    scale = loss_mask[6] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[6, v_idx] = probs[6, v_idx] * scale
+    probs[6, target6] += -inv_sum_mask[0] * loss_mask[6]
+
+    scale = loss_mask[7] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[7, v_idx] = probs[7, v_idx] * scale
+    probs[7, target7] += -inv_sum_mask[0] * loss_mask[7]
+
+    scale = loss_mask[8] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[8, v_idx] = probs[8, v_idx] * scale
+    probs[8, target8] += -inv_sum_mask[0] * loss_mask[8]
+
+    scale = loss_mask[9] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[9, v_idx] = probs[9, v_idx] * scale
+    probs[9, target9] += -inv_sum_mask[0] * loss_mask[9]
+
+    scale = loss_mask[10] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[10, v_idx] = probs[10, v_idx] * scale
+    probs[10, target10] += -inv_sum_mask[0] * loss_mask[10]
+
+    scale = loss_mask[11] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[11, v_idx] = probs[11, v_idx] * scale
+    probs[11, target11] += -inv_sum_mask[0] * loss_mask[11]
+
+    scale = loss_mask[12] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[12, v_idx] = probs[12, v_idx] * scale
+    probs[12, target12] += -inv_sum_mask[0] * loss_mask[12]
+
+    scale = loss_mask[13] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[13, v_idx] = probs[13, v_idx] * scale
+    probs[13, target13] += -inv_sum_mask[0] * loss_mask[13]
+
+    scale = loss_mask[14] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[14, v_idx] = probs[14, v_idx] * scale
+    probs[14, target14] += -inv_sum_mask[0] * loss_mask[14]
+
+    scale = loss_mask[15] * inv_sum_mask[0]
+    for v_idx in seq(0, V):
+        probs[15, v_idx] = probs[15, v_idx] * scale
+    probs[15, target15] += -inv_sum_mask[0] * loss_mask[15]
+
+    _lm_head_bwd(V, dx1, g_lm_head, probs, dx0, lm_head)
+
+    _mlp_bwd_fused(dx0, g_mlp_fc1, g_mlp_fc2, dx1, x1, mlp_xn, mlp_rms, h_pre, h_buf, mlp_fc1, mlp_fc2, rms_inv_n)
+    _attn_bwd_fused(dx1, g_attn_wq, g_attn_wk, g_attn_wv, g_attn_wo, dattn_out, dx0, x0, attn_xn, attn_rms, q, k, v, attn_w, out_flat, attn_wq, attn_wk, attn_wv, attn_wo)
+    _rmsnorm_bwd(BLOCK_SIZE, N_EMBED, dx0, dx1, emb, rms_init, rms_inv_n)
+
+    for e in seq(0, N_EMBED):
+        g_wte[input0, e] += dx0[0, e]
+        g_wpe[0, e] += dx0[0, e]
+        g_wte[input1, e] += dx0[1, e]
+        g_wpe[1, e] += dx0[1, e]
+        g_wte[input2, e] += dx0[2, e]
+        g_wpe[2, e] += dx0[2, e]
+        g_wte[input3, e] += dx0[3, e]
+        g_wpe[3, e] += dx0[3, e]
+        g_wte[input4, e] += dx0[4, e]
+        g_wpe[4, e] += dx0[4, e]
+        g_wte[input5, e] += dx0[5, e]
+        g_wpe[5, e] += dx0[5, e]
+        g_wte[input6, e] += dx0[6, e]
+        g_wpe[6, e] += dx0[6, e]
+        g_wte[input7, e] += dx0[7, e]
+        g_wpe[7, e] += dx0[7, e]
+        g_wte[input8, e] += dx0[8, e]
+        g_wpe[8, e] += dx0[8, e]
+        g_wte[input9, e] += dx0[9, e]
+        g_wpe[9, e] += dx0[9, e]
+        g_wte[input10, e] += dx0[10, e]
+        g_wpe[10, e] += dx0[10, e]
+        g_wte[input11, e] += dx0[11, e]
+        g_wpe[11, e] += dx0[11, e]
+        g_wte[input12, e] += dx0[12, e]
+        g_wpe[12, e] += dx0[12, e]
+        g_wte[input13, e] += dx0[13, e]
+        g_wpe[13, e] += dx0[13, e]
+        g_wte[input14, e] += dx0[14, e]
+        g_wpe[14, e] += dx0[14, e]
+        g_wte[input15, e] += dx0[15, e]
+        g_wpe[15, e] += dx0[15, e]
+
+    _adam(N_PARAMS, flat_params, flat_grads, flat_m, flat_v, adam_b1, adam_b2, adam_eps, lr, bc1, bc2)
 
 
 JIT_RMSNORM_FWD = jit(simplify(_rmsnorm_fwd.partial_eval(M=BLOCK_SIZE, N=N_EMBED)))
@@ -999,53 +1332,93 @@ def mlp_bwd(dx: Tensor, grads: dict, fc1: Tensor, fc2: Tensor, c: MlpCache, li: 
 
 
 def forward(params: dict, input_ids: Tensor, target_ids: Tensor, loss_mask: Tensor) -> tuple[float, FwdCache]:
-    emb = gather_add_rows(params["wte"], input_ids, params["wpe"])
-    x, rms_init = rmsnorm_fwd(emb)
+    emb = gather_add_rows_into(params["wte"], input_ids, params["wpe"], EMB)
+    JIT_RMSNORM_FWD._raw(X0.ctypes.data, RMS_INIT.ctypes.data, EMB.ctypes.data, RMS_INV_N.ctypes.data, RMS_EPS.ctypes.data)
 
     layer_caches = []
+    x = X0
     for li in range(N_LAYER):
-        x, ac = attn_fwd(x, params[f"layer{li}.attn_wq"], params[f"layer{li}.attn_wk"], params[f"layer{li}.attn_wv"], params[f"layer{li}.attn_wo"])
-        x, mc = mlp_fwd(x, params[f"layer{li}.mlp_fc1"], params[f"layer{li}.mlp_fc2"])
+        JIT_ATTN_FWD._raw(
+            X1.ctypes.data,
+            ATTN_XN.ctypes.data,
+            ATTN_RMS.ctypes.data,
+            Q.ctypes.data,
+            K.ctypes.data,
+            V_BUF.ctypes.data,
+            ATTN_W.ctypes.data,
+            OUT_FLAT.ctypes.data,
+            X0.ctypes.data,
+            params[f"layer{li}.attn_wq"].ctypes.data,
+            params[f"layer{li}.attn_wk"].ctypes.data,
+            params[f"layer{li}.attn_wv"].ctypes.data,
+            params[f"layer{li}.attn_wo"].ctypes.data,
+        )
+        ac = AttnCache(x, ATTN_XN, ATTN_RMS, Q, K, V_BUF, ATTN_W, OUT_FLAT)
+        JIT_MLP_FWD._raw(
+            DX0.ctypes.data,
+            MLP_XN.ctypes.data,
+            MLP_RMS.ctypes.data,
+            H_PRE.ctypes.data,
+            H_BUF.ctypes.data,
+            X1.ctypes.data,
+            params[f"layer{li}.mlp_fc1"].ctypes.data,
+            params[f"layer{li}.mlp_fc2"].ctypes.data,
+            RMS_INV_N.ctypes.data,
+            RMS_EPS.ctypes.data,
+        )
+        mc = MlpCache(X1, MLP_XN, MLP_RMS, H_PRE, H_BUF)
         layer_caches.append((ac, mc))
+        x = DX0
 
-    logits = empty_array((BLOCK_SIZE, params["lm_head"].shape[0]), dtype=float)
+    logits = LOGITS
+    probs = PROBS
     JIT_LOGITS._raw(logits.ctypes.data, x.ctypes.data, params["lm_head"].ctypes.data)
-    probs = empty_like_array(logits)
     JIT_SOFTMAX._raw(probs.ctypes.data, logits.ctypes.data)
-    sum_mask = float(loss_mask.sum())
+    sum_mask = sum_1d(loss_mask)
     loss = cross_entropy_loss(probs, target_ids, loss_mask, sum_mask)
-    return float(loss), FwdCache(input_ids, target_ids, loss_mask, sum_mask, emb, rms_init, x, probs, layer_caches)
+    return float(loss), FwdCache(input_ids, target_ids, loss_mask, sum_mask, emb, RMS_INIT, x, probs, layer_caches)
 
 
 def backward(params: dict, grads: dict, cache: FwdCache) -> None:
-    dlogits = cache.probs.copy()
+    dlogits = LOGITS
+    ctypes.memmove(dlogits.ctypes.data, cache.probs.ctypes.data, array_numel(dlogits.shape) * ctypes.sizeof(dlogits._ctype))
     inv_sum_mask = 1.0 / cache.sum_mask
     scale_tensor_inplace(dlogits, inv_sum_mask)
     subtract_target_logprobs_inplace(dlogits, cache.target_ids, inv_sum_mask)
     mask_rows_inplace(dlogits, cache.loss_mask)
 
-    dx = empty_array((BLOCK_SIZE, N_EMBED), dtype=float)
-    JIT_LM_HEAD_BWD._raw(dx.ctypes.data, grads["lm_head"].ctypes.data, dlogits.ctypes.data, cache.x.ctypes.data, params["lm_head"].ctypes.data)
+    JIT_LM_HEAD_BWD._raw(DX1.ctypes.data, grads["lm_head"].ctypes.data, dlogits.ctypes.data, cache.x.ctypes.data, params["lm_head"].ctypes.data)
 
     for li in reversed(range(N_LAYER)):
         ac, mc = cache.layer_caches[li]
-        dx = mlp_bwd(dx, grads, params[f"layer{li}.mlp_fc1"], params[f"layer{li}.mlp_fc2"], mc, li)
-        dx = attn_bwd(dx, grads, params[f"layer{li}.attn_wq"], params[f"layer{li}.attn_wk"], params[f"layer{li}.attn_wv"], params[f"layer{li}.attn_wo"], ac, li)
+        JIT_MLP_BWD._raw(DX0.ctypes.data, grads[f"layer{li}.mlp_fc1"].ctypes.data, grads[f"layer{li}.mlp_fc2"].ctypes.data, DX1.ctypes.data, mc.x_pre.ctypes.data, mc.xn.ctypes.data, mc.rms.ctypes.data, mc.h_pre.ctypes.data, mc.h.ctypes.data, params[f"layer{li}.mlp_fc1"].ctypes.data, params[f"layer{li}.mlp_fc2"].ctypes.data, RMS_INV_N.ctypes.data)
+        JIT_ATTN_BWD._raw(DX2.ctypes.data, grads[f"layer{li}.attn_wq"].ctypes.data, grads[f"layer{li}.attn_wk"].ctypes.data, grads[f"layer{li}.attn_wv"].ctypes.data, grads[f"layer{li}.attn_wo"].ctypes.data, DATTN_OUT.ctypes.data, DX0.ctypes.data, ac.x_pre.ctypes.data, ac.xn.ctypes.data, ac.rms.ctypes.data, ac.q.ctypes.data, ac.k.ctypes.data, ac.v.ctypes.data, ac.attn_w.ctypes.data, ac.out_flat.ctypes.data, params[f"layer{li}.attn_wq"].ctypes.data, params[f"layer{li}.attn_wk"].ctypes.data, params[f"layer{li}.attn_wv"].ctypes.data, params[f"layer{li}.attn_wo"].ctypes.data)
+        JIT_RMSNORM_BWD._raw(DX1.ctypes.data, DX2.ctypes.data, cache.emb.ctypes.data, cache.rms_init.ctypes.data, RMS_INV_N.ctypes.data)
 
-    demb = rmsnorm_bwd(dx, cache.emb, cache.rms_init)
-    scatter_add_rows(grads["wte"], cache.input_ids, demb)
-    add_tensor_inplace(grads["wpe"], demb)
+    scatter_add_rows(grads["wte"], cache.input_ids, DX1)
+    add_tensor_inplace(grads["wpe"], DX1)
 
 
 def step_fn(params: dict, opt_state: dict, grads: dict, input_ids: Tensor, target_ids: Tensor, loss_mask: Tensor, step: int) -> tuple[float, dict, dict]:
-    JIT_ZERO_GRADS._raw(opt_state["flat_grads"].ctypes.data)
-    loss, cache = forward(params, input_ids, target_ids, loss_mask)
-    backward(params, grads, cache)
-
     opt_state["lr"][0] = ADAM_PARAMS["LR_T"][step]
     opt_state["bc1"][0] = ADAM_PARAMS["BC1"][step]
     opt_state["bc2"][0] = ADAM_PARAMS["BC2"][step]
-    JIT_ADAM._raw(opt_state["flat_params"].ctypes.data, opt_state["flat_grads"].ctypes.data, opt_state["flat_m"].ctypes.data, opt_state["flat_v"].ctypes.data, ADAM_B1.ctypes.data, ADAM_B2.ctypes.data, ADAM_EPS.ctypes.data, opt_state["lr"].ctypes.data, opt_state["bc1"].ctypes.data, opt_state["bc2"].ctypes.data)
+    ctypes.memset(grads["wte"].ctypes.data, 0, array_numel(grads["wte"].shape) * ctypes.sizeof(grads["wte"]._ctype))
+    ctypes.memset(grads["wpe"].ctypes.data, 0, array_numel(grads["wpe"].shape) * ctypes.sizeof(grads["wpe"]._ctype))
+    loss, cache = forward(params, input_ids, target_ids, loss_mask)
+    backward(params, grads, cache)
+    JIT_ADAM._raw(
+        opt_state["flat_params"].ctypes.data,
+        opt_state["flat_grads"].ctypes.data,
+        opt_state["flat_m"].ctypes.data,
+        opt_state["flat_v"].ctypes.data,
+        ADAM_B1.ctypes.data,
+        ADAM_B2.ctypes.data,
+        ADAM_EPS.ctypes.data,
+        opt_state["lr"].ctypes.data,
+        opt_state["bc1"].ctypes.data,
+        opt_state["bc2"].ctypes.data,
+    )
     return loss, params, opt_state
 
 
@@ -1115,10 +1488,12 @@ opt_state = {
 
 tokenized = [tokenize(doc, uchars) for doc in docs]
 
+LOGITS = empty_array((BLOCK_SIZE, len(uchars) + 1), dtype=float)
+PROBS = empty_array((BLOCK_SIZE, len(uchars) + 1), dtype=float)
+
 JIT_LOGITS = _jit_matmul_nt(BLOCK_SIZE, N_EMBED, len(uchars) + 1)
 JIT_SOFTMAX = _jit_softmax_2d(BLOCK_SIZE, len(uchars) + 1)
 JIT_LM_HEAD_BWD = jit(simplify(_lm_head_bwd.partial_eval(V=len(uchars) + 1)))
-JIT_ZERO_GRADS = _jit_zero_1d(total_params)
 JIT_ADAM = _jit_adam(total_params)
 
 step_times = []
