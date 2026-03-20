@@ -20,46 +20,23 @@ from utils import assert_weights_match, save_times
 from exojit.main import jit
 from exojit.patches_exo import Stack
 
-# ==============================================================================
-# Global Variables
-# ==============================================================================
+random.seed(42)
 
 
-@dataclass(slots=True)
-class Buf:
-    ptr: int
-    _a: object
-    _o: int
-    n: int
-
-    def __init__(self, n, dtype=float, _a=None, _o=0):
-        ct = ctypes.c_double if dtype is float else ctypes.c_int64
-        self._a = (ct * n)() if _a is None else _a
-        self._o = _o
-        self.n = n
-        self.ptr = ctypes.addressof(self._a) + _o * 8
-
-    def view(self, n, off=0):
-        return Buf(n, float, self._a, self._o + off)
-
-    def __getitem__(self, i):
-        return self._a[self._o + i]
-
-    def __setitem__(self, i, v):
-        self._a[self._o + i] = v
-
-
+N_LAYER = 1
 N_EMBED = 16
 BLOCK_SIZE = 16
 N_HEAD = 4
+NUM_STEPS = 1000
+
+
 HEAD_DIM = N_EMBED // N_HEAD
-INV_SCALE = 1.0 / HEAD_DIM**0.5
 CAUSAL_MASK_VALUE = -1e10
 
 
-# ==============================================================================
-# Kernels
-# ==============================================================================
+#
+# kernels
+#
 
 
 @proc
@@ -173,33 +150,6 @@ def cross_entropy_bwd(M: size, N: size, probs: f64[M, N] @ DRAM, target_ids: siz
 
 
 @proc
-def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM, beta1: f64[1] @ DRAM, beta2: f64[1] @ DRAM):
-    inv_b1: f64 @ Stack
-    inv_b2: f64 @ Stack
-    inv_beta1_t: f64 @ Stack
-    inv_beta2_t: f64 @ Stack
-    inv_b1 = 1.0 - beta1[0]
-    inv_b2 = 1.0 - beta2[0]
-    inv_beta1_t = 1.0 / beta1_t[0]
-    inv_beta2_t = 1.0 / beta2_t[0]
-
-    for i in seq(0, N):
-        g: f64 @ Stack
-        m_val: f64 @ Stack
-        v_val: f64 @ Stack
-        m_hat: f64 @ Stack
-        v_hat: f64 @ Stack
-        g = grad[i]
-        m_val = beta1[0] * m[i] + inv_b1 * g
-        v_val = beta2[0] * v[i] + inv_b2 * g * g
-        m_hat = m_val * inv_beta1_t
-        v_hat = v_val * inv_beta2_t
-        param[i] = param[i] - lr[0] * m_hat / (sqrt(v_hat) + 1e-8)
-        m[i] = m_val
-        v[i] = v_val
-
-
-@proc
 def attention(out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, scale: f64[1] @ DRAM):
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
@@ -274,18 +224,36 @@ def attention_bwd(dq: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dk: f64[N_HEAD, 
                     dk[h, s, d] += dlogit * q[h, t, d]
 
 
-# ==============================================================================
-# Layers
-# ==============================================================================
-
-
 @proc
-def lm_head_layer(vocab_size: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[vocab_size, N_EMBED] @ DRAM, logits: f64[BLOCK_SIZE, vocab_size] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, lm_head: f64[vocab_size, N_EMBED] @ DRAM, loss_mask: f64[BLOCK_SIZE] @ DRAM, inv_sum_mask: f64[1] @ DRAM, target_ids: size[BLOCK_SIZE] @ DRAM):
-    matmul_right_t(BLOCK_SIZE, vocab_size, N_EMBED, logits, x, lm_head)
-    softmax(BLOCK_SIZE, vocab_size, logits)
-    cross_entropy_bwd(BLOCK_SIZE, vocab_size, logits, target_ids, loss_mask, inv_sum_mask)
-    matmul_left_t(BLOCK_SIZE, vocab_size, N_EMBED, dweight, logits, x)
-    matmul(BLOCK_SIZE, N_EMBED, vocab_size, dx, logits, lm_head)
+def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM, beta1: f64[1] @ DRAM, beta2: f64[1] @ DRAM):
+    inv_b1: f64 @ Stack
+    inv_b2: f64 @ Stack
+    inv_beta1_t: f64 @ Stack
+    inv_beta2_t: f64 @ Stack
+    inv_b1 = 1.0 - beta1[0]
+    inv_b2 = 1.0 - beta2[0]
+    inv_beta1_t = 1.0 / beta1_t[0]
+    inv_beta2_t = 1.0 / beta2_t[0]
+
+    for i in seq(0, N):
+        g: f64 @ Stack
+        m_val: f64 @ Stack
+        v_val: f64 @ Stack
+        m_hat: f64 @ Stack
+        v_hat: f64 @ Stack
+        g = grad[i]
+        m_val = beta1[0] * m[i] + inv_b1 * g
+        v_val = beta2[0] * v[i] + inv_b2 * g * g
+        m_hat = m_val * inv_beta1_t
+        v_hat = v_val * inv_beta2_t
+        param[i] = param[i] - lr[0] * m_hat / (sqrt(v_hat) + 1e-8)
+        m[i] = m_val
+        v[i] = v_val
+
+
+#
+# layers
+#
 
 
 @proc
@@ -412,9 +380,18 @@ def mlp_layer_bwd(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dfc1: f64[4 * N_EMBED, N
     rmsnorm_bwd(out, dx, x_pre, rms, inv_n)
 
 
-# ==============================================================================
+@proc
+def lm_head_layer(vocab_size: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[vocab_size, N_EMBED] @ DRAM, logits: f64[BLOCK_SIZE, vocab_size] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, lm_head: f64[vocab_size, N_EMBED] @ DRAM, loss_mask: f64[BLOCK_SIZE] @ DRAM, inv_sum_mask: f64[1] @ DRAM, target_ids: size[BLOCK_SIZE] @ DRAM):
+    matmul_right_t(BLOCK_SIZE, vocab_size, N_EMBED, logits, x, lm_head)
+    softmax(BLOCK_SIZE, vocab_size, logits)
+    cross_entropy_bwd(BLOCK_SIZE, vocab_size, logits, target_ids, loss_mask, inv_sum_mask)
+    matmul_left_t(BLOCK_SIZE, vocab_size, N_EMBED, dweight, logits, x)
+    matmul(BLOCK_SIZE, N_EMBED, vocab_size, dx, logits, lm_head)
+
+
+#
 # Train Loop
-# ==============================================================================
+#
 
 
 @jit(optimize=simplify, raw=True)
@@ -481,6 +458,30 @@ def named_params(params, layout):
     return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
 
 
+@dataclass(slots=True)
+class Buf:
+    ptr: int
+    _a: object
+    _o: int
+    n: int
+
+    def __init__(self, n, dtype=float, _a=None, _o=0):
+        ct = ctypes.c_double if dtype is float else ctypes.c_int64
+        self._a = (ct * n)() if _a is None else _a
+        self._o = _o
+        self.n = n
+        self.ptr = ctypes.addressof(self._a) + _o * 8
+
+    def view(self, n, off=0):
+        return Buf(n, float, self._a, self._o + off)
+
+    def __getitem__(self, i):
+        return self._a[self._o + i]
+
+    def __setitem__(self, i, v):
+        self._a[self._o + i] = v
+
+
 def tokenize(doc, c2i, bos):
     tokens = [bos] + [c2i[ch] for ch in doc] + [bos]
     n = min(BLOCK_SIZE, len(tokens) - 1)
@@ -497,9 +498,6 @@ def tokenize(doc, c2i, bos):
 
 
 if __name__ == "__main__":
-    random.seed(42)
-    num_steps = 1000
-
     docs = (Path(__file__).parent / "input.txt").read_text().splitlines()
     random.shuffle(docs)
     uchars = sorted(set("".join(docs)))
@@ -531,7 +529,7 @@ if __name__ == "__main__":
     scalars["rms_inv_n"][0] = 1.0 / N_EMBED
     scalars["opt_beta1"][0] = 0.9
     scalars["opt_beta2"][0] = 0.999
-    scalars["attn_scale"][0] = INV_SCALE
+    scalars["attn_scale"][0] = 1.0 / HEAD_DIM**0.5
 
     adam_step = jit(simplify(adam.partial_eval(N=flat_params.n)))._raw
 
@@ -541,14 +539,14 @@ if __name__ == "__main__":
 
     g_wte_bytes = grads["wte"].n * 8
     g_wpe_bytes = grads["wpe"].n * 8
-    lr_t = [0.01 * (1.0 - step / num_steps) for step in range(num_steps)]
-    bc1 = [1.0 - 0.9 ** (step + 1) for step in range(num_steps)]
-    bc2 = [1.0 - 0.999 ** (step + 1) for step in range(num_steps)]
+    lr_t = [0.01 * (1.0 - step / NUM_STEPS) for step in range(NUM_STEPS)]
+    bc1 = [1.0 - 0.9 ** (step + 1) for step in range(NUM_STEPS)]
+    bc2 = [1.0 - 0.999 ** (step + 1) for step in range(NUM_STEPS)]
     memset = ctypes.memset
     perf_counter = time.perf_counter
     step_times = []
 
-    for step in range(num_steps):
+    for step in range(NUM_STEPS):
         scalars["opt_lr"][0] = lr_t[step]
         scalars["opt_bc1"][0] = bc1[step]
         scalars["opt_bc2"][0] = bc2[step]
