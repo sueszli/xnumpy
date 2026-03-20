@@ -58,6 +58,9 @@ def relu(M: size, N: size, out: f64[M, N] @ DRAM, x: f64[M, N] @ DRAM):
             out[i, j] = select(0.0, x[i, j], x[i, j], 0.0)
 
 
+# TODO: relu_bwd
+
+
 @proc
 def rmsnorm(M: size, N: size, out: f64[M, N] @ DRAM, rms: f64[M, 1] @ DRAM, x: f64[M, N] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
     # out = x / sqrt(mean(x^2) + eps)
@@ -114,3 +117,69 @@ def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v
         param[i] = param[i] - lr[0] * m_hat / (sqrt(v_hat) + 1e-8)
         m[i] = m_val
         v[i] = v_val
+
+
+# TODO: attention
+
+# @proc
+# def scaled_dot_product_attention(
+#     N_HEAD: size,
+#     BLOCK_SIZE: size,
+#     HEAD_DIM: size,
+#     out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+#     q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+#     k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+#     v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM,
+#     attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM,
+#     scale: f64 @ Stack,
+# ):
+#     CAUSAL_MASK_VALUE = -1e10
+
+#     # 1. Compute attention logits with causal mask + online softmax max
+#     for h in seq(0, N_HEAD):
+#         for t in seq(0, BLOCK_SIZE):
+#             mx: f64 @ Stack
+#             mx = CAUSAL_MASK_VALUE
+#             for s in seq(0, BLOCK_SIZE):
+#                 logit: f64 @ Stack
+#                 if s > t:
+#                     logit = CAUSAL_MASK_VALUE
+#                 else:
+#                     logit = 0.0
+#                     for d in seq(0, HEAD_DIM):
+#                         logit += q[h, t, d] * k[h, s, d]
+#                     logit = logit * scale
+#                 attn_w[h, t, s] = logit
+#                 mx = select(mx, attn_w[h, t, s], attn_w[h, t, s], mx)
+
+#     # 2. Softmax: exp(x - max) / sum
+#             sum_val: f64 @ Stack
+#             sum_val = 0.0
+#             for s in seq(0, BLOCK_SIZE):
+#                 attn_w[h, t, s] = expf(attn_w[h, t, s] - mx)
+#                 sum_val += attn_w[h, t, s]
+#             for s in seq(0, BLOCK_SIZE):
+#                 attn_w[h, t, s] = attn_w[h, t, s] / sum_val
+
+#     # 3. Aggregate: weighted sum of values
+#     for h in seq(0, N_HEAD):
+#         for t in seq(0, BLOCK_SIZE):
+#             for d in seq(0, HEAD_DIM):
+#                 acc: f64 @ Stack
+#                 acc = 0.0
+#                 for s in seq(0, BLOCK_SIZE):
+#                     acc += attn_w[h, t, s] * v[h, s, d]
+#                 out[h, t, d] = acc
+
+#  In `attn_fwd_fused`, replace lines 113-148 with:
+#    ```python
+#    scaled_dot_product_attention(
+#        N_HEAD, BLOCK_SIZE, HEAD_DIM,
+#        out_flat_3d,  # need to reshape or use different layout
+#        q, k, v, attn_w,
+#        INV_SCALE
+#    )
+#    ```
+
+# Flatten `out_flat_3d[N_HEAD, BLOCK_SIZE, HEAD_DIM]` to `out_flat[BLOCK_SIZE, N_EMBED]`
+#    - Or modify kernel output to match existing layout directly

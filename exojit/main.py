@@ -249,25 +249,18 @@ class IRGenerator:
         return emit(FCmpOp(lhs, rhs, float_cmp_table[op]))
 
     def _expr_binop(self, binop: LoopIR.BinOp) -> SSAValue:
-        # lower binary op to typed llvm op
-        is_num_type = isinstance(binop.type, T.Num)
-
-        if is_num_type:
-            # For division with constant numerator, evaluate rhs first to get type
-            if binop.op == "/" and isinstance(binop.lhs, LoopIR.Const):
-                rhs = self._expr(binop.rhs)
-                mlir_type = rhs.type
-                lhs = self._expr(binop.lhs, mlir_type)
-            else:
-                # evaluate operands first to infer type
-                lhs = self._expr(binop.lhs)
-                rhs = self._expr(binop.rhs)
-                # use actual operand type (should match for valid Exo)
-                mlir_type = lhs.type
-        else:
+        if not isinstance(binop.type, T.Num):
             mlir_type = self._to_mlir_type(binop.type)
             lhs = self._expr(binop.lhs, mlir_type)
             rhs = self._expr(binop.rhs, mlir_type)
+        elif binop.op == "/" and isinstance(binop.lhs, LoopIR.Const):
+            rhs = self._expr(binop.rhs)
+            mlir_type = rhs.type
+            lhs = self._expr(binop.lhs, mlir_type)
+        else:
+            lhs = self._expr(binop.lhs)
+            rhs = self._expr(binop.rhs)
+            mlir_type = lhs.type
 
         if mlir_type == i1:
             return self._cmp_binop(lhs, rhs, binop.op, self._emit)
@@ -715,7 +708,6 @@ def _lower(procs: list[LoopIR.proc]) -> ModuleOp:
 
     module = IRGenerator().generate(procs)
 
-    # optimize
     CanonicalizePass().apply(ctx, module)
     CommonSubexpressionElimination().apply(ctx, module)
     module.verify()
@@ -728,7 +720,6 @@ def _lower(procs: list[LoopIR.proc]) -> ModuleOp:
     ReconcileUnrealizedCastsPass().apply(ctx, module)  # fold paired unrealized casts
     module.verify()
 
-    # optimize
     CanonicalizePass().apply(ctx, module)
     CommonSubexpressionElimination().apply(ctx, module)
     module.verify()
@@ -780,10 +771,8 @@ class LLVMLiteGenerator:
         # translate one xdsl op to llvmlite ir. unmatched ops fall back to xdsl's convert_op
         match op:
             case llvm.ConstantOp():
-                if isinstance(op.value, DenseIntOrFPElementsAttr):
-                    val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), list(op.value.iter_values()))
-                else:
-                    val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), op.value.value.data)
+                is_dense = isinstance(op.value, DenseIntOrFPElementsAttr)
+                val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), list(op.value.iter_values()) if is_dense else op.value.value.data)
             case FNegOp():
                 val_map[op.res] = builder.fneg(val_map[op.arg])
             case FCmpOp():
@@ -807,20 +796,11 @@ class LLVMLiteGenerator:
                 mask = llvmlite.ir.Constant(llvmlite.ir.VectorType(llvmlite.ir.IntType(32), n_lanes), [0] * n_lanes)
                 val_map[op.vector] = builder.shuffle_vector(inserted, undef, mask)
             case vector.FMAOp():
-                val_map[op.res] = builder.call(
-                    LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.fma", convert_type(op.res.type), arity=3),
-                    [val_map[op.lhs], val_map[op.rhs], val_map[op.acc]],
-                )
+                val_map[op.res] = builder.call(LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.fma", convert_type(op.res.type), arity=3), [val_map[op.lhs], val_map[op.rhs], val_map[op.acc]])
             case VectorFMaxOp():
-                val_map[op.res] = builder.call(
-                    LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.maxnum", convert_type(op.res.type), arity=2),
-                    [val_map[op.lhs], val_map[op.rhs]],
-                )
+                val_map[op.res] = builder.call(LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.maxnum", convert_type(op.res.type), arity=2), [val_map[op.lhs], val_map[op.rhs]])
             case FSqrtOp():
-                val_map[op.res] = builder.call(
-                    LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.sqrt", convert_type(op.res.type), arity=1),
-                    [val_map[op.arg]],
-                )
+                val_map[op.res] = builder.call(LLVMLiteGenerator._get_intrinsic(builder.module, "llvm.sqrt", convert_type(op.res.type), arity=1), [val_map[op.arg]])
             case llvm.AddressOfOp():
                 val_map[op.result] = builder.module.get_global(op.global_name.root_reference.data)
             case llvm.NullOp():
@@ -904,14 +884,15 @@ def _target_machine() -> llvmlite.binding.TargetMachine:
     return target.create_target_machine(cpu=cpu, features=features, opt=3)
 
 
-def _to_llvmlite_moduleref(llvmlite_module: llvmlite.ir.Module) -> tuple[llvmlite.binding.ModuleRef, llvmlite.binding.TargetMachine]:
-    # llvmlite ir -> parsed + optimized llvm module ref
-    mod_ref = llvmlite.binding.parse_assembly(str(llvmlite_module))
+def _to_llvmlite_moduleref(ir: llvmlite.ir.Module | str) -> tuple[llvmlite.binding.ModuleRef, llvmlite.binding.TargetMachine]:
+    mod_ref = llvmlite.binding.parse_assembly(str(ir))
     tm = _target_machine()
     pto = llvmlite.binding.PipelineTuningOptions()
-    pto.speed_level = 3  # o3 optimization
-    pto.loop_vectorization = True  # enable loop vectorizer
-    pto.slp_vectorization = True  # enable slp vectorizer (straight-line code)
+    pto.speed_level = 3
+    pto.loop_vectorization = True
+    pto.slp_vectorization = True
+    pto.loop_interleaving = True
+    pto.loop_unrolling = True
     pb = llvmlite.binding.create_pass_builder(tm, pto)
     pb.getModulePassManager().run(mod_ref, pb)
     return mod_ref, tm
@@ -1153,24 +1134,12 @@ def jit(proc: Procedure, raw: bool = False) -> Callable[..., None] | JitFunc:
     cache_key = hashlib.sha256(str(mlir_module).encode()).hexdigest()[:16]
     ir_text = _disk_cache(cache_key, lambda: str(LLVMLiteGenerator.generate(mlir_module)))
 
-    # load libomp for parallel loops
-    # https://openmp.llvm.org/doxygen/group__THREADPRIVATE.html
+    # see https://openmp.llvm.org/doxygen/group__THREADPRIVATE.html
     if "__kmpc_fork_call" in ir_text:
         _load_libomp()
 
-    # parse + o3 optimize
-    mod_ref = llvmlite.binding.parse_assembly(ir_text)
-    tm = _target_machine()
-    pto = llvmlite.binding.PipelineTuningOptions()
-    pto.speed_level = 3
-    pto.loop_vectorization = True
-    pto.slp_vectorization = True
-    pto.loop_interleaving = True
-    pto.loop_unrolling = True
-    pb = llvmlite.binding.create_pass_builder(tm, pto)
-    pb.getModulePassManager().run(mod_ref, pb)
+    mod_ref, tm = _to_llvmlite_moduleref(ir_text)
 
-    # compile
     engine = llvmlite.binding.create_mcjit_compiler(mod_ref, tm)
     engine.finalize_object()
     engine.run_static_constructors()
@@ -1190,7 +1159,6 @@ def jit(proc: Procedure, raw: bool = False) -> Callable[..., None] | JitFunc:
 
 
 def _dedup_proc_names(user_module: object) -> list[Procedure]:
-    # collect public procedures from a module and keep the last name match
     exported = getattr(user_module, "__all__", None)
     symbols = user_module.__dict__.items() if exported is None else ((name, getattr(user_module, name)) for name in exported)
     procs = [proc for name, proc in symbols if not name.startswith("_") and isinstance(proc, Procedure) and not proc.is_instr()]

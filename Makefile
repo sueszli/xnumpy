@@ -20,6 +20,3 @@ fmt:
 .PHONY: benchmark
 benchmark:
 	uv run python benchmarks/run.py
-
-.PHONY: precommit
-precommit: fmt tests benchmark
