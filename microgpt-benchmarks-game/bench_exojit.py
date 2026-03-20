@@ -380,15 +380,6 @@ def mlp_layer_bwd(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dfc1: f64[4 * N_EMBED, N
     rmsnorm_bwd(out, dx, x_pre, rms, inv_n)
 
 
-@proc
-def lm_head_layer(vocab_size: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[vocab_size, N_EMBED] @ DRAM, logits: f64[BLOCK_SIZE, vocab_size] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, lm_head: f64[vocab_size, N_EMBED] @ DRAM, loss_mask: f64[BLOCK_SIZE] @ DRAM, inv_sum_mask: f64[1] @ DRAM, target_ids: size[BLOCK_SIZE] @ DRAM):
-    matmul_right_t(BLOCK_SIZE, vocab_size, N_EMBED, logits, x, lm_head)
-    softmax(BLOCK_SIZE, vocab_size, logits)
-    cross_entropy_bwd(BLOCK_SIZE, vocab_size, logits, target_ids, loss_mask, inv_sum_mask)
-    matmul_left_t(BLOCK_SIZE, vocab_size, N_EMBED, dweight, logits, x)
-    matmul(BLOCK_SIZE, N_EMBED, vocab_size, dx, logits, lm_head)
-
-
 #
 # train loop
 #
@@ -399,7 +390,11 @@ def train_step(vocab_size: size, emb: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x0: f64[B
     embed_layer(vocab_size, emb, x0, rms_init, wte, wpe, inv_n, input_ids)
     attention_layer(x1, attn_xn, attn_rms, q, k, v, attn_w, attn_out, out_flat, x0, attn_wq, attn_wk, attn_wv, attn_wo, inv_n, attn_scale)
     mlp_layer(dx0, mlp_xn, mlp_rms, h_pre, h, x1, mlp_fc1, mlp_fc2, inv_n)
-    lm_head_layer(vocab_size, dx1, g_lm_head, logits, dx0, lm_head, loss_mask, inv_sum_mask, target_ids)
+    matmul_right_t(BLOCK_SIZE, vocab_size, N_EMBED, logits, dx0, lm_head)
+    softmax(BLOCK_SIZE, vocab_size, logits)
+    cross_entropy_bwd(BLOCK_SIZE, vocab_size, logits, target_ids, loss_mask, inv_sum_mask)
+    matmul_left_t(BLOCK_SIZE, vocab_size, N_EMBED, g_lm_head, logits, dx0)
+    matmul(BLOCK_SIZE, N_EMBED, vocab_size, dx1, logits, lm_head)
     mlp_layer_bwd(dx0, g_mlp_fc1, g_mlp_fc2, dh, dh_pre, dx1, x1, mlp_xn, mlp_rms, h_pre, h, mlp_fc1, mlp_fc2, inv_n)
     attention_layer_bwd(dx1, g_attn_wq, g_attn_wk, g_attn_wv, g_attn_wo, dattn_out, dx0, x0, attn_xn, attn_rms, q, k, v, attn_w, out_flat, dq, dk, dv, attn_wq, attn_wk, attn_wv, attn_wo, inv_n, attn_scale)
     embed_layer_bwd(vocab_size, g_wte, g_wpe, dx1, emb, rms_init, inv_n, input_ids)
