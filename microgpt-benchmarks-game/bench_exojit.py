@@ -5,7 +5,7 @@ import random
 import sys
 import time
 from collections import namedtuple
-from dataclasses import dataclass
+from itertools import accumulate
 from math import prod
 from pathlib import Path
 
@@ -398,52 +398,20 @@ def train_step(vocab_size: size, total_params: size, emb: f64[BLOCK_SIZE, N_EMBE
     adam(total_params, flat_params, flat_grads, opt_m, opt_v, lr, beta1_t, beta2_t)
 
 
-@dataclass(slots=True)
-class Buf:
-    ptr: int
-    _a: object
-    _o: int
-    n: int
-
-    def __init__(self, n, dtype=float, _a=None, _o=0):
-        ct = ctypes.c_double if dtype is float else ctypes.c_int64
-        self._a = (ct * n)() if _a is None else _a
-        self._o = _o
-        self.n = n
-        self.ptr = ctypes.addressof(self._a) + _o * 8
-
-    def view(self, n, off=0):
-        return Buf(n, float, self._a, self._o + off)
-
-    def partition(self, shapes: dict[str, tuple]) -> dict[str, "Buf"]:
-        off = 0
-        d: dict[str, Buf] = {}
-        for name, shape in shapes.items():
-            d[name] = self.view(prod(shape), off)
-            off += prod(shape)
-        return d
-
-    def __getitem__(self, i):
-        return self._a[self._o + i]
-
-    def __setitem__(self, i, v):
-        self._a[self._o + i] = v
-
-
-def tokenize(docs: list[str], uchars: list[str]) -> list[dict[str, Buf]]:
+def tokenize(docs: list[str], uchars: list[str]) -> list[dict]:
     bos = len(uchars)
     result = []
     for doc in docs:
         tokens = [bos] + [{ch: i for i, ch in enumerate(uchars)}[ch] for ch in doc] + [bos]
         n = min(BLOCK_SIZE, len(tokens) - 1)
-        inputs = Buf(BLOCK_SIZE, int)
-        targets = Buf(BLOCK_SIZE, int)
-        loss_mask = Buf(BLOCK_SIZE)
+        inputs = (ctypes.c_int64 * BLOCK_SIZE)()
+        targets = (ctypes.c_int64 * BLOCK_SIZE)()
+        loss_mask = (ctypes.c_double * BLOCK_SIZE)()
         for i in range(n):
             inputs[i] = tokens[i]
             targets[i] = tokens[i + 1]
             loss_mask[i] = 1.0
-        inv_sum_mask = Buf(1)
+        inv_sum_mask = (ctypes.c_double * 1)()
         inv_sum_mask[0] = 1.0 / max(1, n)
         result.append({"input_ids": inputs, "target_ids": targets, "loss_mask": loss_mask, "inv_sum_mask": inv_sum_mask})
     return result
@@ -498,53 +466,51 @@ SCRATCH_SHAPES: dict[str, tuple] = {
 
 
 if __name__ == "__main__":
-    flat_params = Buf(sum(prod(s) for s in PARAMS_SHAPES.values()))
-    params = flat_params.partition(PARAMS_SHAPES)
-    for buf in params.values():
-        for i in range(buf.n):
-            buf[i] = random.gauss(0.0, 0.08)
+    partition = lambda shapes, arr: {name: (ctypes.c_double * prod(shape)).from_buffer(arr, off * 8) for (name, shape), off in zip(shapes.items(), accumulate((prod(s) for s in shapes.values()), initial=0))}
 
-    flat_grads = Buf(flat_params.n)
-    grads = flat_grads.partition(PARAMS_SHAPES)
-    opt_m, opt_v = Buf(flat_params.n), Buf(flat_params.n)
+    flat_params = (ctypes.c_double * sum(prod(s) for s in PARAMS_SHAPES.values()))()
+    for i in range(len(flat_params)):
+        flat_params[i] = random.gauss(0.0, 0.08)
+    params = partition(PARAMS_SHAPES, flat_params)
 
-    scratch = Buf(sum(prod(s) for s in SCRATCH_SHAPES.values())).partition(SCRATCH_SHAPES)
-    opt_lr, opt_bc1, opt_bc2 = Buf(1), Buf(1), Buf(1)
+    flat_grads = (ctypes.c_double * len(flat_params))()
+    grads = partition(PARAMS_SHAPES, flat_grads)
+    opt_m = (ctypes.c_double * len(flat_params))()
+    opt_v = (ctypes.c_double * len(flat_params))()
 
-    args = {
+    scratch = partition(SCRATCH_SHAPES, (ctypes.c_double * sum(prod(s) for s in SCRATCH_SHAPES.values()))())
+    opt_lr = (ctypes.c_double * 1)()
+    opt_bc1 = (ctypes.c_double * 1)()
+    opt_bc2 = (ctypes.c_double * 1)()
+
+    static_args = {
         "vocab_size": vocab_size,
-        "total_params": flat_params.n,
-        **{f: scratch[f].ptr for f in SCRATCH_SHAPES},
-        **{f: params[f].ptr for f in PARAMS_SHAPES},
-        **{"g_" + f: grads[f].ptr for f in PARAMS_SHAPES},
-        "flat_params": flat_params.ptr,
-        "flat_grads": flat_grads.ptr,
-        "opt_m": opt_m.ptr,
-        "opt_v": opt_v.ptr,
-        "lr": opt_lr.ptr,
-        "beta1_t": opt_bc1.ptr,
-        "beta2_t": opt_bc2.ptr,
+        "total_params": len(flat_params),
+        **{f: ctypes.addressof(scratch[f]) for f in SCRATCH_SHAPES},
+        **{f: ctypes.addressof(params[f]) for f in PARAMS_SHAPES},
+        **{"g_" + f: ctypes.addressof(grads[f]) for f in PARAMS_SHAPES},
+        "flat_params": ctypes.addressof(flat_params),
+        "flat_grads": ctypes.addressof(flat_grads),
+        "opt_m": ctypes.addressof(opt_m),
+        "opt_v": ctypes.addressof(opt_v),
+        "lr": ctypes.addressof(opt_lr),
+        "beta1_t": ctypes.addressof(opt_bc1),
+        "beta2_t": ctypes.addressof(opt_bc2),
     }
 
-    grads_to_clear = [(grads["wte"].ptr, grads["wte"].n * 8), (grads["wpe"].ptr, grads["wpe"].n * 8)]
-    lr_t = [0.01 * (1.0 - s / NUM_STEPS) for s in range(NUM_STEPS)]
-    bc1 = [1.0 - 0.9 ** (s + 1) for s in range(NUM_STEPS)]
-    bc2 = [1.0 - 0.999 ** (s + 1) for s in range(NUM_STEPS)]
-
     step_times = []
-    for step, (lr, b1, b2) in enumerate(zip(lr_t, bc1, bc2)):
-        opt_lr[0] = lr
-        opt_bc1[0] = b1
-        opt_bc2[0] = b2
+    for step in range(NUM_STEPS):
+        opt_lr[0] = 0.01 * (1.0 - step / NUM_STEPS)
+        opt_bc1[0] = 1.0 - 0.9 ** (step + 1)
+        opt_bc2[0] = 1.0 - 0.999 ** (step + 1)
         batch = tokenized[step % len(tokenized)]
-        for ptr, n in grads_to_clear:
-            ctypes.memset(ptr, 0, n)
+        ctypes.memset(ctypes.addressof(grads["wte"]), 0, len(grads["wte"]) * 8)
+        ctypes.memset(ctypes.addressof(grads["wpe"]), 0, len(grads["wpe"]) * 8)
         t0 = time.perf_counter()
-        args.update({k: batch[k].ptr for k in ("loss_mask", "inv_sum_mask", "input_ids", "target_ids")})
-        train_step(**args)
+        train_step(**static_args, **{k: ctypes.addressof(batch[k]) for k in ("loss_mask", "inv_sum_mask", "input_ids", "target_ids")})
         step_times.append(time.perf_counter() - t0)
 
     save_times(step_times)
     W = namedtuple("W", ["data"])
     display = lambda k: ("layer0." + k) if k.startswith(("attn", "mlp")) else k
-    assert_weights_match({display(k): [[W(float(params[k][i * s[1] + j])) for j in range(s[1])] for i in range(params[k].n // s[1])] for k, s in PARAMS_SHAPES.items()})
+    assert_weights_match({display(k): [[W(float(params[k][i * s[1] + j])) for j in range(s[1])] for i in range(len(params[k]) // s[1])] for k, s in PARAMS_SHAPES.items()})
