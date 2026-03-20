@@ -412,36 +412,6 @@ def bind(fields: list[str], flat: Buf, layout: tuple[tuple[int, ...], ...]) -> d
     return d
 
 
-def scratch_layout(vocab_size: int) -> tuple[tuple[int, ...], ...]:
-    return (
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, vocab_size),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, BLOCK_SIZE),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-    )
-
-
 def named_params(params: dict[str, Buf], layout: tuple[tuple[int, int], ...]) -> list[tuple[str, Buf, int]]:
     names = ("wte", "wpe", "lm_head", "layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2")
     return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
@@ -509,7 +479,33 @@ if __name__ == "__main__":
     grads = bind(PARAMS_FIELDS, flat_grads, params_layout)
     opt_m, opt_v = Buf(flat_params.n), Buf(flat_params.n)
 
-    sl = scratch_layout(vocab_size)
+    sl = (
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, 1),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, vocab_size),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, 1),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, BLOCK_SIZE),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, 1),
+        (BLOCK_SIZE, 4 * N_EMBED),
+        (BLOCK_SIZE, 4 * N_EMBED),
+        (BLOCK_SIZE, 4 * N_EMBED),
+        (BLOCK_SIZE, 4 * N_EMBED),
+        (BLOCK_SIZE, N_EMBED),
+        (BLOCK_SIZE, N_EMBED),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    )
     scratch = bind(SCRATCH_FIELDS, Buf(sum(prod(s) for s in sl)), sl)
     scalars = bind(SCALARS_FIELDS, Buf(3), ((1,) for _ in SCALARS_FIELDS))
 
