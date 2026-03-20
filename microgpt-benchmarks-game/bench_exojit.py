@@ -16,7 +16,7 @@ from exo import *
 from exo.libs.externs import expf, select
 from exo.stdlib.scheduling import simplify
 from utils.exo_alloc import Tensor, empty, zeros
-from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd
+from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, rmsnorm, rmsnorm_bwd
 from utils.times import save_times
 from utils.weights import assert_weights_match
 
@@ -172,17 +172,15 @@ def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_
 
     for t in seq(0, BLOCK_SIZE):
         for e in seq(0, 4 * N_EMBED):
-            h[t, e] = 0.0
+            dh: f64 @ Stack
+            dh_pre: f64 @ Stack
+            dh = 0.0
             for j in seq(0, N_EMBED):
-                h[t, e] += dx[t, j] * fc2[j, e]
-
-    relu_bwd(BLOCK_SIZE, 4 * N_EMBED, h, h, h_pre, zero)
-
-    for t in seq(0, BLOCK_SIZE):
-        for e in seq(0, 4 * N_EMBED):
+                dh += dx[t, j] * fc2[j, e]
+            dh_pre = select(0.0, h_pre[t, e], dh, 0.0)
             for k in seq(0, N_EMBED):
-                dw1[e, k] += h[t, e] * xn[t, k]
-                out[t, k] += h[t, e] * fc1[e, k]
+                dw1[e, k] += dh_pre * xn[t, k]
+                out[t, k] += dh_pre * fc1[e, k]
 
     rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
 

@@ -59,13 +59,6 @@ def relu(M: size, N: size, out: f64[M, N] @ DRAM, x: f64[M, N] @ DRAM, zero: f64
 
 
 @proc
-def relu_bwd(M: size, N: size, out: f64[M, N] @ DRAM, dout: f64[M, N] @ DRAM, x: f64[M, N] @ DRAM, zero: f64[1] @ DRAM):
-    for i in seq(0, M):
-        for j in seq(0, N):
-            out[i, j] = select(zero[0], x[i, j], dout[i, j], zero[0])
-
-
-@proc
 def rmsnorm(M: size, N: size, out: f64[M, N] @ DRAM, rms: f64[M, 1] @ DRAM, x: f64[M, N] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
     # out = x / sqrt(mean(x^2) + eps)
     for i in seq(0, M):
