@@ -448,80 +448,83 @@ vocab_size = len(uchars) + 1
 tokenized = tokenize(docs, uchars)
 
 
-PARAMS_FIELDS = "wte wpe lm_head attn_wq attn_wk attn_wv attn_wo mlp_fc1 mlp_fc2".split()
-SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w attn_out out_flat mlp_xn mlp_rms h_pre h dh dh_pre dx0 dx1 dattn_out dq dk dv".split()
-SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2".split()
+PARAMS_SHAPES: dict[str, tuple] = {
+    "wte": (vocab_size, N_EMBED),
+    "wpe": (BLOCK_SIZE, N_EMBED),
+    "lm_head": (vocab_size, N_EMBED),
+    "attn_wq": (N_EMBED, N_EMBED),
+    "attn_wk": (N_EMBED, N_EMBED),
+    "attn_wv": (N_EMBED, N_EMBED),
+    "attn_wo": (N_EMBED, N_EMBED),
+    "mlp_fc1": (4 * N_EMBED, N_EMBED),
+    "mlp_fc2": (N_EMBED, 4 * N_EMBED),
+}
+
+SCRATCH_SHAPES: dict[str, tuple] = {
+    "emb": (BLOCK_SIZE, N_EMBED),
+    "rms_init": (BLOCK_SIZE, 1),
+    "x0": (BLOCK_SIZE, N_EMBED),
+    "x1": (BLOCK_SIZE, N_EMBED),
+    "logits": (BLOCK_SIZE, vocab_size),
+    "attn_xn": (BLOCK_SIZE, N_EMBED),
+    "attn_rms": (BLOCK_SIZE, 1),
+    "q": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "k": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "v": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "attn_w": (N_HEAD, BLOCK_SIZE, BLOCK_SIZE),
+    "attn_out": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "out_flat": (BLOCK_SIZE, N_EMBED),
+    "mlp_xn": (BLOCK_SIZE, N_EMBED),
+    "mlp_rms": (BLOCK_SIZE, 1),
+    "h_pre": (BLOCK_SIZE, 4 * N_EMBED),
+    "h": (BLOCK_SIZE, 4 * N_EMBED),
+    "dh": (BLOCK_SIZE, 4 * N_EMBED),
+    "dh_pre": (BLOCK_SIZE, 4 * N_EMBED),
+    "dx0": (BLOCK_SIZE, N_EMBED),
+    "dx1": (BLOCK_SIZE, N_EMBED),
+    "dattn_out": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "dq": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "dk": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+    "dv": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
+}
 
 
-def bind(fields: list[str], flat: Buf, layout: tuple[tuple[int, ...], ...]) -> dict[str, Buf]:
+def bind(shapes: dict[str, tuple], flat: Buf) -> dict[str, Buf]:
     off = 0
     d: dict[str, Buf] = {}
-    for name, shape in zip(fields, layout):
+    for name, shape in shapes.items():
         d[name] = flat.view(prod(shape), off)
         off += prod(shape)
     return d
 
 
-def named_params(params: dict[str, Buf], layout: tuple[tuple[int, int], ...]) -> list[tuple[str, Buf, int]]:
-    names = ("wte", "wpe", "lm_head", "layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2")
-    return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
-
-
 if __name__ == "__main__":
-    params_layout = [(vocab_size, N_EMBED), (BLOCK_SIZE, N_EMBED), (vocab_size, N_EMBED)] + [(N_EMBED, N_EMBED)] * 4 + [(4 * N_EMBED, N_EMBED), (N_EMBED, 4 * N_EMBED)]
-    flat_params = Buf(sum(prod(s) for s in params_layout))
-    params = bind(PARAMS_FIELDS, flat_params, params_layout)
-    for _, buf, _ in named_params(params, params_layout):
+    flat_params = Buf(sum(prod(s) for s in PARAMS_SHAPES.values()))
+    params = bind(PARAMS_SHAPES, flat_params)
+    for buf in params.values():
         for i in range(buf.n):
             buf[i] = random.gauss(0.0, 0.08)
 
     flat_grads = Buf(flat_params.n)
-    grads = bind(PARAMS_FIELDS, flat_grads, params_layout)
+    grads = bind(PARAMS_SHAPES, flat_grads)
     opt_m, opt_v = Buf(flat_params.n), Buf(flat_params.n)
 
-    sl = (
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, vocab_size),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, BLOCK_SIZE),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, 1),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, 4 * N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (BLOCK_SIZE, N_EMBED),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-    )
-    scratch = bind(SCRATCH_FIELDS, Buf(sum(prod(s) for s in sl)), sl)
-    scalars = bind(SCALARS_FIELDS, Buf(3), ((1,) for _ in SCALARS_FIELDS))
+    scratch = bind(SCRATCH_SHAPES, Buf(sum(prod(s) for s in SCRATCH_SHAPES.values())))
+    opt_lr, opt_bc1, opt_bc2 = Buf(1), Buf(1), Buf(1)
 
     args = {
         "vocab_size": vocab_size,
         "total_params": flat_params.n,
-        **{f: scratch[f].ptr for f in SCRATCH_FIELDS},
-        **{f: params[f].ptr for f in PARAMS_FIELDS},
-        **{"g_" + f: grads[f].ptr for f in PARAMS_FIELDS},
+        **{f: scratch[f].ptr for f in SCRATCH_SHAPES},
+        **{f: params[f].ptr for f in PARAMS_SHAPES},
+        **{"g_" + f: grads[f].ptr for f in PARAMS_SHAPES},
         "flat_params": flat_params.ptr,
         "flat_grads": flat_grads.ptr,
         "opt_m": opt_m.ptr,
         "opt_v": opt_v.ptr,
-        "lr": scalars["opt_lr"].ptr,
-        "beta1_t": scalars["opt_bc1"].ptr,
-        "beta2_t": scalars["opt_bc2"].ptr,
+        "lr": opt_lr.ptr,
+        "beta1_t": opt_bc1.ptr,
+        "beta2_t": opt_bc2.ptr,
     }
 
     grads_to_clear = [(grads["wte"].ptr, grads["wte"].n * 8), (grads["wpe"].ptr, grads["wpe"].n * 8)]
@@ -532,9 +535,9 @@ if __name__ == "__main__":
     memset, perf_counter = ctypes.memset, time.perf_counter
     step_times = []
     for step, (lr, b1, b2) in enumerate(zip(lr_t, bc1, bc2)):
-        scalars["opt_lr"][0] = lr
-        scalars["opt_bc1"][0] = b1
-        scalars["opt_bc2"][0] = b2
+        opt_lr[0] = lr
+        opt_bc1[0] = b1
+        opt_bc2[0] = b2
         batch = tokenized[step % len(tokenized)]
         for ptr, n in grads_to_clear:
             memset(ptr, 0, n)
@@ -545,4 +548,5 @@ if __name__ == "__main__":
 
     save_times(step_times)
     W = namedtuple("W", ["data"])
-    assert_weights_match({name: [[W(float(buf[i * cols + j])) for j in range(cols)] for i in range(buf.n // cols)] for name, buf, cols in named_params(params, params_layout)})
+    display = lambda k: ("layer0." + k) if k.startswith(("attn", "mlp")) else k
+    assert_weights_match({display(k): [[W(float(params[k][i * s[1] + j])) for j in range(s[1])] for i in range(params[k].n // s[1])] for k, s in PARAMS_SHAPES.items()})
