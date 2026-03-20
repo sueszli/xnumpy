@@ -123,3 +123,33 @@ def normal(shape: tuple[int, ...], loc: float = 0.0, scale: float = 1.0) -> Tens
     for i in range(out._size):
         out._buf[i] = random.gauss(loc, scale)
     return out
+
+
+def pack_tensors(tensors: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor], int]:
+    # flatten tensors into one shared storage block and return typed views
+    total = sum(t._size for t in tensors.values())
+    flat = empty((total,), dtype=float)
+    flat_ptr = flat.ctypes.data
+    elt_bytes = ctypes.sizeof(flat._ctype)
+    offset = 0
+    views = {}
+    for name, tensor in tensors.items():
+        ctypes.memmove(flat_ptr + offset * elt_bytes, tensor.ctypes.data, tensor._size * elt_bytes)
+        views[name] = reshape(flat, tensor.shape, offset=offset)
+        offset += tensor._size
+    return flat, views, elt_bytes
+
+
+def view_tensors(flat: Tensor, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+    # rebuild tensor views over existing flat storage
+    offset = 0
+    views = {}
+    for name, tensor in tensors.items():
+        views[name] = reshape(flat, tensor.shape, offset=offset)
+        offset += tensor._size
+    return views
+
+
+def tensor_ptrs(tensors: dict[str, Tensor]) -> dict[str, int]:
+    # expose raw data pointers for raw-jit entry points
+    return {name: tensor.ctypes.data for name, tensor in tensors.items()}

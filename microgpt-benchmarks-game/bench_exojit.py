@@ -15,10 +15,10 @@ repo = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo))
 
 from exo import *
-from exo.libs.externs import expf, select, sqrt
+from exo.libs.externs import expf, select
 from exo.stdlib.scheduling import simplify
-from utils.exo_alloc import Tensor, empty, full, normal, reshape, zeros, zeros_like
-from utils.exo_kernels import add, fill, fill3, matmul, matmul_left_t, matmul_right_t, relu, rmsnorm, rmsnorm_bwd
+from utils.exo_alloc import Tensor, empty, full, normal, pack_tensors, tensor_ptrs, view_tensors, zeros, zeros_like
+from utils.exo_kernels import adam, add, fill, fill3, make_embed_rms_bwd_tokens, make_embed_rms_fwd_tokens, make_lm_head_step_fused, matmul_left_t, matmul_right_t, relu, rmsnorm, rmsnorm_bwd
 from utils.times import save_times
 from utils.weights import assert_weights_match
 
@@ -31,33 +31,6 @@ N_HEAD = 4
 HEAD_DIM = N_EMBED // N_HEAD
 INV_SCALE = 1.0 / HEAD_DIM**0.5
 CAUSAL_MASK_VALUE = -1e10
-
-
-def pack_tensors(tensors: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor], int]:
-    total = sum(t._size for t in tensors.values())
-    flat = empty((total,), dtype=float)
-    flat_ptr = flat.ctypes.data
-    elt_bytes = ctypes.sizeof(flat._ctype)
-    views = {}
-    offset = 0
-    for name, tensor in tensors.items():
-        ctypes.memmove(flat_ptr + offset * elt_bytes, tensor.ctypes.data, tensor._size * elt_bytes)
-        views[name] = reshape(flat, tensor.shape, offset=offset)
-        offset += tensor._size
-    return flat, views, elt_bytes
-
-
-def view_tensors(flat: Tensor, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
-    views = {}
-    offset = 0
-    for name, tensor in tensors.items():
-        views[name] = reshape(flat, tensor.shape, offset=offset)
-        offset += tensor._size
-    return views
-
-
-def tensor_ptrs(tensors: dict[str, Tensor]) -> dict[str, int]:
-    return {name: tensor.ctypes.data for name, tensor in tensors.items()}
 
 
 @proc
@@ -85,27 +58,9 @@ def embed_rms_bwd_token(V: size, g_wte: f64[V, N_EMBED] @ DRAM, g_wpe_row: [f64]
         g_wpe_row[e] = dx
 
 
-@proc
-def softmax_xent_row(V: size, row: [f64][V] @ DRAM, loss: [f64][1] @ DRAM, inv_sum_mask: f64[1] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, target: size):
-    assert target < V
-    mx: f64 @ Stack
-    sum_val: f64 @ Stack
-    scale: f64 @ Stack
-    val: f64 @ Stack
-    inv_denom: f64 @ Stack
-    mx = row[0]
-    for v_idx in seq(1, V):
-        mx = select(mx, row[v_idx], row[v_idx], mx)
-    sum_val = zero[0]
-    for v_idx in seq(0, V):
-        val = expf(row[v_idx] - mx)
-        row[v_idx] = val
-        sum_val += val
-    inv_denom = one[0] / sum_val
-    scale = loss[0] * inv_sum_mask[0] * inv_denom
-    for v_idx in seq(0, V):
-        row[v_idx] = row[v_idx] * scale
-    row[target] += -inv_sum_mask[0] * loss[0]
+lm_head_step_fused = make_lm_head_step_fused(BLOCK_SIZE, N_EMBED)
+embed_rms_fwd_tokens = make_embed_rms_fwd_tokens(BLOCK_SIZE, N_EMBED, embed_token)
+embed_rms_bwd_tokens = make_embed_rms_bwd_tokens(BLOCK_SIZE, N_EMBED, embed_rms_bwd_token)
 
 
 @proc
@@ -201,33 +156,6 @@ def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_
 
 
 @proc
-def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, b1: f64[1] @ DRAM, b2: f64[1] @ DRAM, eps: f64[1] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM):
-    inv_b1: f64 @ Stack
-    inv_b2: f64 @ Stack
-    inv_beta1_t: f64 @ Stack
-    inv_beta2_t: f64 @ Stack
-    inv_b1 = 1.0 - b1[0]
-    inv_b2 = 1.0 - b2[0]
-    inv_beta1_t = 1.0 / beta1_t[0]
-    inv_beta2_t = 1.0 / beta2_t[0]
-
-    for i in seq(0, N):
-        g: f64 @ Stack
-        m_val: f64 @ Stack
-        v_val: f64 @ Stack
-        m_hat: f64 @ Stack
-        v_hat: f64 @ Stack
-        g = grad[i]
-        m_val = b1[0] * m[i] + inv_b1 * g
-        v_val = b2[0] * v[i] + inv_b2 * g * g
-        m_hat = m_val * inv_beta1_t
-        v_hat = v_val * inv_beta2_t
-        param[i] = param[i] - lr[0] * m_hat / (sqrt(v_hat) + eps[0])
-        m[i] = m_val
-        v[i] = v_val
-
-
-@proc
 def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMBED] @ DRAM, dwk: f64[N_EMBED, N_EMBED] @ DRAM, dwv: f64[N_EMBED, N_EMBED] @ DRAM, dwo: f64[N_EMBED, N_EMBED] @ DRAM, dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, zero: f64[1] @ DRAM, inv_n: f64[1] @ DRAM):
     attn_tmp: f64[BLOCK_SIZE] @ Stack
     fill(BLOCK_SIZE, N_EMBED, out, zero)
@@ -281,118 +209,6 @@ def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMB
                     dwq[h * HEAD_DIM + d, e] += dq_acc[d] * xn[t, e]
 
     rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
-
-
-@proc
-def lm_head_step_fused(V: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[V, N_EMBED] @ DRAM, logits: f64[BLOCK_SIZE, V] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, lm_head: f64[V, N_EMBED] @ DRAM, loss_mask: f64[BLOCK_SIZE] @ DRAM, inv_sum_mask: f64[1] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, target0: size, target1: size, target2: size, target3: size, target4: size, target5: size, target6: size, target7: size, target8: size, target9: size, target10: size, target11: size, target12: size, target13: size, target14: size, target15: size):
-    assert target0 < V
-    assert target1 < V
-    assert target2 < V
-    assert target3 < V
-    assert target4 < V
-    assert target5 < V
-    assert target6 < V
-    assert target7 < V
-    assert target8 < V
-    assert target9 < V
-    assert target10 < V
-    assert target11 < V
-    assert target12 < V
-    assert target13 < V
-    assert target14 < V
-    assert target15 < V
-    matmul_right_t(BLOCK_SIZE, V, N_EMBED, logits, x, lm_head, zero)
-    softmax_xent_row(V, logits[0, :], loss_mask[0:1], inv_sum_mask, zero, one, target0)
-    softmax_xent_row(V, logits[1, :], loss_mask[1:2], inv_sum_mask, zero, one, target1)
-    softmax_xent_row(V, logits[2, :], loss_mask[2:3], inv_sum_mask, zero, one, target2)
-    softmax_xent_row(V, logits[3, :], loss_mask[3:4], inv_sum_mask, zero, one, target3)
-    softmax_xent_row(V, logits[4, :], loss_mask[4:5], inv_sum_mask, zero, one, target4)
-    softmax_xent_row(V, logits[5, :], loss_mask[5:6], inv_sum_mask, zero, one, target5)
-    softmax_xent_row(V, logits[6, :], loss_mask[6:7], inv_sum_mask, zero, one, target6)
-    softmax_xent_row(V, logits[7, :], loss_mask[7:8], inv_sum_mask, zero, one, target7)
-    softmax_xent_row(V, logits[8, :], loss_mask[8:9], inv_sum_mask, zero, one, target8)
-    softmax_xent_row(V, logits[9, :], loss_mask[9:10], inv_sum_mask, zero, one, target9)
-    softmax_xent_row(V, logits[10, :], loss_mask[10:11], inv_sum_mask, zero, one, target10)
-    softmax_xent_row(V, logits[11, :], loss_mask[11:12], inv_sum_mask, zero, one, target11)
-    softmax_xent_row(V, logits[12, :], loss_mask[12:13], inv_sum_mask, zero, one, target12)
-    softmax_xent_row(V, logits[13, :], loss_mask[13:14], inv_sum_mask, zero, one, target13)
-    softmax_xent_row(V, logits[14, :], loss_mask[14:15], inv_sum_mask, zero, one, target14)
-    softmax_xent_row(V, logits[15, :], loss_mask[15:16], inv_sum_mask, zero, one, target15)
-    matmul_left_t(BLOCK_SIZE, V, N_EMBED, dweight, logits, x, zero)
-    matmul(BLOCK_SIZE, N_EMBED, V, dx, logits, lm_head, zero)
-
-
-@proc
-def embed_rms_fwd_tokens(V: size, emb: f64[BLOCK_SIZE, N_EMBED] @ DRAM, out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, wte: f64[V, N_EMBED] @ DRAM, wpe: f64[BLOCK_SIZE, N_EMBED] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM, input0: size, input1: size, input2: size, input3: size, input4: size, input5: size, input6: size, input7: size, input8: size, input9: size, input10: size, input11: size, input12: size, input13: size, input14: size, input15: size):
-    assert input0 < V
-    assert input1 < V
-    assert input2 < V
-    assert input3 < V
-    assert input4 < V
-    assert input5 < V
-    assert input6 < V
-    assert input7 < V
-    assert input8 < V
-    assert input9 < V
-    assert input10 < V
-    assert input11 < V
-    assert input12 < V
-    assert input13 < V
-    assert input14 < V
-    assert input15 < V
-    embed_token(V, emb[0, :], wte, wpe[0, :], input0)
-    embed_token(V, emb[1, :], wte, wpe[1, :], input1)
-    embed_token(V, emb[2, :], wte, wpe[2, :], input2)
-    embed_token(V, emb[3, :], wte, wpe[3, :], input3)
-    embed_token(V, emb[4, :], wte, wpe[4, :], input4)
-    embed_token(V, emb[5, :], wte, wpe[5, :], input5)
-    embed_token(V, emb[6, :], wte, wpe[6, :], input6)
-    embed_token(V, emb[7, :], wte, wpe[7, :], input7)
-    embed_token(V, emb[8, :], wte, wpe[8, :], input8)
-    embed_token(V, emb[9, :], wte, wpe[9, :], input9)
-    embed_token(V, emb[10, :], wte, wpe[10, :], input10)
-    embed_token(V, emb[11, :], wte, wpe[11, :], input11)
-    embed_token(V, emb[12, :], wte, wpe[12, :], input12)
-    embed_token(V, emb[13, :], wte, wpe[13, :], input13)
-    embed_token(V, emb[14, :], wte, wpe[14, :], input14)
-    embed_token(V, emb[15, :], wte, wpe[15, :], input15)
-    rmsnorm(BLOCK_SIZE, N_EMBED, out, rms, emb, zero, one, inv_n, eps)
-
-
-@proc
-def embed_rms_bwd_tokens(V: size, g_wte: f64[V, N_EMBED] @ DRAM, g_wpe: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dout: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, zero: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, input0: size, input1: size, input2: size, input3: size, input4: size, input5: size, input6: size, input7: size, input8: size, input9: size, input10: size, input11: size, input12: size, input13: size, input14: size, input15: size):
-    assert input0 < V
-    assert input1 < V
-    assert input2 < V
-    assert input3 < V
-    assert input4 < V
-    assert input5 < V
-    assert input6 < V
-    assert input7 < V
-    assert input8 < V
-    assert input9 < V
-    assert input10 < V
-    assert input11 < V
-    assert input12 < V
-    assert input13 < V
-    assert input14 < V
-    assert input15 < V
-    embed_rms_bwd_token(V, g_wte, g_wpe[0, :], dout[0, :], x[0, :], rms[0, 0:1], zero, inv_n, input0)
-    embed_rms_bwd_token(V, g_wte, g_wpe[1, :], dout[1, :], x[1, :], rms[1, 0:1], zero, inv_n, input1)
-    embed_rms_bwd_token(V, g_wte, g_wpe[2, :], dout[2, :], x[2, :], rms[2, 0:1], zero, inv_n, input2)
-    embed_rms_bwd_token(V, g_wte, g_wpe[3, :], dout[3, :], x[3, :], rms[3, 0:1], zero, inv_n, input3)
-    embed_rms_bwd_token(V, g_wte, g_wpe[4, :], dout[4, :], x[4, :], rms[4, 0:1], zero, inv_n, input4)
-    embed_rms_bwd_token(V, g_wte, g_wpe[5, :], dout[5, :], x[5, :], rms[5, 0:1], zero, inv_n, input5)
-    embed_rms_bwd_token(V, g_wte, g_wpe[6, :], dout[6, :], x[6, :], rms[6, 0:1], zero, inv_n, input6)
-    embed_rms_bwd_token(V, g_wte, g_wpe[7, :], dout[7, :], x[7, :], rms[7, 0:1], zero, inv_n, input7)
-    embed_rms_bwd_token(V, g_wte, g_wpe[8, :], dout[8, :], x[8, :], rms[8, 0:1], zero, inv_n, input8)
-    embed_rms_bwd_token(V, g_wte, g_wpe[9, :], dout[9, :], x[9, :], rms[9, 0:1], zero, inv_n, input9)
-    embed_rms_bwd_token(V, g_wte, g_wpe[10, :], dout[10, :], x[10, :], rms[10, 0:1], zero, inv_n, input10)
-    embed_rms_bwd_token(V, g_wte, g_wpe[11, :], dout[11, :], x[11, :], rms[11, 0:1], zero, inv_n, input11)
-    embed_rms_bwd_token(V, g_wte, g_wpe[12, :], dout[12, :], x[12, :], rms[12, 0:1], zero, inv_n, input12)
-    embed_rms_bwd_token(V, g_wte, g_wpe[13, :], dout[13, :], x[13, :], rms[13, 0:1], zero, inv_n, input13)
-    embed_rms_bwd_token(V, g_wte, g_wpe[14, :], dout[14, :], x[14, :], rms[14, 0:1], zero, inv_n, input14)
-    embed_rms_bwd_token(V, g_wte, g_wpe[15, :], dout[15, :], x[15, :], rms[15, 0:1], zero, inv_n, input15)
 
 
 def tokenize(doc: str, c2i: dict[str, int], bos: int, ptrs: dict[str, dict[str, int]], zero_ptr: int, one_ptr: int, rms_inv_n_ptr: int, rms_eps_ptr: int):
