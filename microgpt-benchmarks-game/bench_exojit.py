@@ -16,7 +16,7 @@ from exo import *
 from exo.libs.externs import expf, select
 from exo.stdlib.scheduling import simplify
 from utils.exo_alloc import Tensor, empty, zeros
-from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, rmsnorm, rmsnorm_bwd
+from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd
 from utils.times import save_times
 from utils.weights import assert_weights_match
 
@@ -161,27 +161,12 @@ def mlp_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EM
 
 
 @proc
-def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_EMBED] @ DRAM, dw2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, h: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM, fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM):
-    for t in seq(0, BLOCK_SIZE):
-        for e in seq(0, N_EMBED):
-            out[t, e] = 0.0
+def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_EMBED] @ DRAM, dw2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, h: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, dh: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, dh_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM, fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM):
     matmul_left_t(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, dw2, dx, h)
-    for e in seq(0, 4 * N_EMBED):
-        for k in seq(0, N_EMBED):
-            dw1[e, k] = 0.0
-
-    for t in seq(0, BLOCK_SIZE):
-        for e in seq(0, 4 * N_EMBED):
-            dh: f64 @ Stack
-            dh_pre: f64 @ Stack
-            dh = 0.0
-            for j in seq(0, N_EMBED):
-                dh += dx[t, j] * fc2[j, e]
-            dh_pre = select(0.0, h_pre[t, e], dh, 0.0)
-            for k in seq(0, N_EMBED):
-                dw1[e, k] += dh_pre * xn[t, k]
-                out[t, k] += dh_pre * fc1[e, k]
-
+    matmul(BLOCK_SIZE, 4 * N_EMBED, N_EMBED, dh, dx, fc2)
+    relu_bwd(BLOCK_SIZE, 4 * N_EMBED, dh_pre, dh, h_pre)
+    matmul_left_t(BLOCK_SIZE, 4 * N_EMBED, N_EMBED, dw1, dh_pre, xn)
+    matmul(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, out, dh_pre, fc1)
     rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, inv_n)
 
 
@@ -286,6 +271,8 @@ class Scratch:
     mlp_rms: Tensor
     h_pre: Tensor
     h: Tensor
+    dh: Tensor
+    dh_pre: Tensor
     dx0: Tensor
     dx1: Tensor
     dattn_out: Tensor
@@ -361,6 +348,8 @@ def scratch_layout(vocab_size: int) -> tuple[tuple[int, ...], ...]:
         (BLOCK_SIZE, N_EMBED),
         (BLOCK_SIZE, N_EMBED),
         (BLOCK_SIZE, 1),
+        (BLOCK_SIZE, 4 * N_EMBED),
+        (BLOCK_SIZE, 4 * N_EMBED),
         (BLOCK_SIZE, 4 * N_EMBED),
         (BLOCK_SIZE, 4 * N_EMBED),
         (BLOCK_SIZE, N_EMBED),
@@ -477,6 +466,8 @@ def main() -> None:
         scratch.mlp_rms.ptr,
         scratch.h_pre.ptr,
         scratch.h.ptr,
+        scratch.dh.ptr,
+        scratch.dh_pre.ptr,
         params.mlp_fc1.ptr,
         params.mlp_fc2.ptr,
         scalars.rms_inv_n.ptr,

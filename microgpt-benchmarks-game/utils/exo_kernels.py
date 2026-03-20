@@ -58,7 +58,11 @@ def relu(M: size, N: size, out: f64[M, N] @ DRAM, x: f64[M, N] @ DRAM):
             out[i, j] = select(0.0, x[i, j], x[i, j], 0.0)
 
 
-# TODO: relu_bwd
+@proc
+def relu_bwd(M: size, N: size, out: f64[M, N] @ DRAM, dout: f64[M, N] @ DRAM, x_pre: f64[M, N] @ DRAM):
+    for i in seq(0, M):
+        for j in seq(0, N):
+            out[i, j] = select(0.0, x_pre[i, j], dout[i, j], 0.0)
 
 
 @proc
