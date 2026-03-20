@@ -234,15 +234,6 @@ SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w out_fl
 SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2 rms_inv_n opt_beta1 opt_beta2".split()
 
 
-def init_normal_(buf: Buf, *, scale: float):
-    for i in range(buf.n):
-        buf[i] = random.gauss(0.0, scale)
-
-
-def layout_numel(layout):
-    return sum(prod(s) for s in layout)
-
-
 def bind(fields, flat, layout):
     off = 0
     d = {}
@@ -318,16 +309,17 @@ if __name__ == "__main__":
         (4 * N_EMBED, N_EMBED),
         (N_EMBED, 4 * N_EMBED),
     )
-    flat_params = Buf(layout_numel(params_layout))
+    flat_params = Buf(sum(prod(s) for s in params_layout))
     params = bind(PARAMS_FIELDS, flat_params, params_layout)
     for name, buf, _ in named_params(params, params_layout):
-        init_normal_(buf, scale=0.08)
+        for i in range(buf.n):
+            buf[i] = random.gauss(0.0, 0.08)
 
     flat_grads = Buf(flat_params.n)
     grads = bind(PARAMS_FIELDS, flat_grads, params_layout)
     opt_state = {"m": Buf(flat_params.n), "v": Buf(flat_params.n)}
 
-    scratch = bind(SCRATCH_FIELDS, Buf(layout_numel(scratch_layout(vocab_size))), scratch_layout(vocab_size))
+    scratch = bind(SCRATCH_FIELDS, Buf(sum(prod(s) for s in scratch_layout(vocab_size))), scratch_layout(vocab_size))
     scalars = bind(SCALARS_FIELDS, Buf(6), ((1,), (1,), (1,), (1,), (1,), (1,)))
     scalars["rms_inv_n"][0] = 1.0 / N_EMBED
     scalars["opt_beta1"][0] = 0.9
