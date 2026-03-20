@@ -398,25 +398,6 @@ def train_step(vocab_size: size, total_params: size, emb: f64[BLOCK_SIZE, N_EMBE
     adam(total_params, flat_params, flat_grads, opt_m, opt_v, lr, beta1_t, beta2_t)
 
 
-PARAMS_FIELDS = "wte wpe lm_head attn_wq attn_wk attn_wv attn_wo mlp_fc1 mlp_fc2".split()
-SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w attn_out out_flat mlp_xn mlp_rms h_pre h dh dh_pre dx0 dx1 dattn_out dq dk dv".split()
-SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2".split()
-
-
-def bind(fields: list[str], flat: Buf, layout: tuple[tuple[int, ...], ...]) -> dict[str, Buf]:
-    off = 0
-    d: dict[str, Buf] = {}
-    for name, shape in zip(fields, layout):
-        d[name] = flat.view(prod(shape), off)
-        off += prod(shape)
-    return d
-
-
-def named_params(params: dict[str, Buf], layout: tuple[tuple[int, int], ...]) -> list[tuple[str, Buf, int]]:
-    names = ("wte", "wpe", "lm_head", "layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2")
-    return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
-
-
 @dataclass(slots=True)
 class Buf:
     ptr: int
@@ -465,6 +446,25 @@ random.shuffle(docs)
 uchars = sorted(set("".join(docs)))
 vocab_size = len(uchars) + 1
 tokenized = tokenize(docs, uchars)
+
+
+PARAMS_FIELDS = "wte wpe lm_head attn_wq attn_wk attn_wv attn_wo mlp_fc1 mlp_fc2".split()
+SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w attn_out out_flat mlp_xn mlp_rms h_pre h dh dh_pre dx0 dx1 dattn_out dq dk dv".split()
+SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2".split()
+
+
+def bind(fields: list[str], flat: Buf, layout: tuple[tuple[int, ...], ...]) -> dict[str, Buf]:
+    off = 0
+    d: dict[str, Buf] = {}
+    for name, shape in zip(fields, layout):
+        d[name] = flat.view(prod(shape), off)
+        off += prod(shape)
+    return d
+
+
+def named_params(params: dict[str, Buf], layout: tuple[tuple[int, int], ...]) -> list[tuple[str, Buf, int]]:
+    names = ("wte", "wpe", "lm_head", "layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2")
+    return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
 
 
 if __name__ == "__main__":
