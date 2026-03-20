@@ -397,7 +397,7 @@ def wrap_state_dict(params: Params) -> dict[str, list[list[object]]]:
     return {name: [[W(float(tensor[i, j])) for j in range(tensor.shape[1])] for i in range(tensor.shape[0])] for name, tensor in named_params(params)}
 
 
-def main() -> None:
+if __name__ == "__main__":
     random.seed(42)
     num_steps = 1000
     attn_fwd, attn_bwd, mlp_fwd, mlp_bwd = (jit(simplify(proc))._raw for proc in (attn_fwd_fused, attn_bwd_fused, mlp_fwd_fused, mlp_bwd_fused))
@@ -469,7 +469,3 @@ def main() -> None:
 
     save_times(step_times)
     assert_weights_match(wrap_state_dict(params))
-
-
-if __name__ == "__main__":
-    main()
