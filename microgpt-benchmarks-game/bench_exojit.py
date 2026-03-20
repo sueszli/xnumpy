@@ -13,10 +13,9 @@ repo = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo))
 
 from exo import *
-from exo.libs.externs import expf, select
 from exo.stdlib.scheduling import simplify
 from utils.exo_alloc import Tensor, empty, zeros
-from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd
+from utils.exo_kernels import adam, add, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd, softmax
 from utils.times import save_times
 from utils.weights import assert_weights_match
 
@@ -34,22 +33,10 @@ CAUSAL_MASK_VALUE = -1e10
 @proc
 def lm_head_step_fused(vocab_size: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f64[vocab_size, N_EMBED] @ DRAM, logits: f64[BLOCK_SIZE, vocab_size] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, lm_head: f64[vocab_size, N_EMBED] @ DRAM, loss_mask: f64[BLOCK_SIZE] @ DRAM, inv_sum_mask: f64[1] @ DRAM, target_ids: size[BLOCK_SIZE] @ DRAM):
     matmul_right_t(BLOCK_SIZE, vocab_size, N_EMBED, logits, x, lm_head)
+    softmax(BLOCK_SIZE, vocab_size, logits)
     for t in seq(0, BLOCK_SIZE):
-        mx: f64 @ Stack
-        sum_val: f64 @ Stack
         scale: f64 @ Stack
-        val: f64 @ Stack
-        inv_denom: f64 @ Stack
-        mx = -1e10
-        for v_idx in seq(0, vocab_size):
-            mx = select(mx, logits[t, v_idx], logits[t, v_idx], mx)
-        sum_val = 0.0
-        for v_idx in seq(0, vocab_size):
-            val = expf(logits[t, v_idx] - mx)
-            logits[t, v_idx] = val
-            sum_val += val
-        inv_denom = 1.0 / sum_val
-        scale = loss_mask[t] * inv_sum_mask[0] * inv_denom
+        scale = loss_mask[t] * inv_sum_mask[0]
         for v_idx in seq(0, vocab_size):
             logits[t, v_idx] = logits[t, v_idx] * scale
             if v_idx == target_ids[t]:
@@ -90,7 +77,7 @@ def embed_rms_bwd(vocab_size: size, g_wte: f64[vocab_size, N_EMBED] @ DRAM, g_wp
 
 
 @proc
-def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
+def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD * BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
     rmsnorm(BLOCK_SIZE, N_EMBED, xn, rms, x, inv_n, eps)
 
     for h in seq(0, N_HEAD):
@@ -112,13 +99,8 @@ def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_E
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
-            mx: f64 @ Stack
-            sum_val: f64 @ Stack
-            logit: f64 @ Stack
-            t0: f64 @ Stack
-
-            mx = CAUSAL_MASK_VALUE
             for s in seq(0, BLOCK_SIZE):
+                logit: f64 @ Stack
                 if s > t:
                     logit = CAUSAL_MASK_VALUE
                 else:
@@ -126,17 +108,9 @@ def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_E
                     for d in seq(0, HEAD_DIM):
                         logit += q[h, t, d] * k[h, s, d]
                     logit = logit * INV_SCALE
-                attn_w[h, t, s] = logit
-                mx = select(mx, attn_w[h, t, s], attn_w[h, t, s], mx)
+                attn_w[h * BLOCK_SIZE + t, s] = logit
 
-            sum_val = 0.0
-            for s in seq(0, BLOCK_SIZE):
-                t0 = attn_w[h, t, s] - mx
-                attn_w[h, t, s] = expf(t0)
-                sum_val += attn_w[h, t, s]
-
-            for s in seq(0, BLOCK_SIZE):
-                attn_w[h, t, s] = attn_w[h, t, s] / sum_val
+    softmax(N_HEAD * BLOCK_SIZE, BLOCK_SIZE, attn_w)
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
@@ -144,7 +118,7 @@ def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_E
                 acc: f64 @ Stack
                 acc = 0.0
                 for s in seq(0, BLOCK_SIZE):
-                    acc += attn_w[h, t, s] * v[h, s, d]
+                    acc += attn_w[h * BLOCK_SIZE + t, s] * v[h, s, d]
                 out_flat[t, h * HEAD_DIM + d] = acc
 
     matmul_right_t(BLOCK_SIZE, N_EMBED, N_EMBED, out, out_flat, wo)
@@ -171,7 +145,7 @@ def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_
 
 
 @proc
-def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMBED] @ DRAM, dwk: f64[N_EMBED, N_EMBED] @ DRAM, dwv: f64[N_EMBED, N_EMBED] @ DRAM, dwo: f64[N_EMBED, N_EMBED] @ DRAM, dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM):
+def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMBED] @ DRAM, dwk: f64[N_EMBED, N_EMBED] @ DRAM, dwv: f64[N_EMBED, N_EMBED] @ DRAM, dwo: f64[N_EMBED, N_EMBED] @ DRAM, dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD * BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, inv_n: f64[1] @ DRAM):
     attn_tmp: f64[BLOCK_SIZE] @ Stack
     for t in seq(0, BLOCK_SIZE):
         for e in seq(0, N_EMBED):
@@ -205,18 +179,18 @@ def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMB
                 for d in seq(0, HEAD_DIM):
                     dattn_w += dattn_out[h, t, d] * v[h, s, d]
                 attn_tmp[s] = dattn_w
-                dot += dattn_w * attn_w[h, t, s]
+                dot += dattn_w * attn_w[h * BLOCK_SIZE + t, s]
 
             for s in seq(0, BLOCK_SIZE):
                 dlogit: f64 @ Stack
-                dlogit = attn_w[h, t, s] * (attn_tmp[s] - dot) * INV_SCALE
+                dlogit = attn_w[h * BLOCK_SIZE + t, s] * (attn_tmp[s] - dot) * INV_SCALE
 
                 for d in seq(0, HEAD_DIM):
                     dk_contrib: f64 @ Stack
                     dv_contrib: f64 @ Stack
                     dq_acc[d] += dlogit * k[h, s, d]
                     dk_contrib = dlogit * q[h, t, d]
-                    dv_contrib = attn_w[h, t, s] * dattn_out[h, t, d]
+                    dv_contrib = attn_w[h * BLOCK_SIZE + t, s] * dattn_out[h, t, d]
 
                     for e in seq(0, N_EMBED):
                         out[s, e] += dk_contrib * wk[h * HEAD_DIM + d, e]
@@ -344,7 +318,7 @@ def scratch_layout(vocab_size: int) -> tuple[tuple[int, ...], ...]:
         (N_HEAD, BLOCK_SIZE, HEAD_DIM),
         (N_HEAD, BLOCK_SIZE, HEAD_DIM),
         (N_HEAD, BLOCK_SIZE, HEAD_DIM),
-        (N_HEAD, BLOCK_SIZE, BLOCK_SIZE),
+        (N_HEAD * BLOCK_SIZE, BLOCK_SIZE),
         (BLOCK_SIZE, N_EMBED),
         (BLOCK_SIZE, N_EMBED),
         (BLOCK_SIZE, 1),
