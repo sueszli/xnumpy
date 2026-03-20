@@ -7,14 +7,6 @@ from exojit.patches_exo import Stack
 
 
 @proc
-def fill(M: size, N: size, x: f64[M, N] @ DRAM, value: f64[1] @ DRAM):
-    # x[i, j] = value
-    for i in seq(0, M):
-        for j in seq(0, N):
-            x[i, j] = value[0]
-
-
-@proc
 def add(M: size, N: size, out: f64[M, N] @ DRAM, x: f64[M, N] @ DRAM):
     # out += x
     for i in seq(0, M):

@@ -4,6 +4,8 @@ import ctypes
 from math import prod
 from typing import Any
 
+import numpy as np
+
 
 class Ptr:
     __slots__ = ("data",)
@@ -12,56 +14,69 @@ class Ptr:
         self.data = data
 
 
-def ctype(dtype: type[float] | type[int]) -> type[ctypes.c_double] | type[ctypes.c_int64]:
-    # python dtype -> ctypes scalar
-    if dtype is float:
+def normalize_dtype(dtype: Any) -> type[float] | type[int]:
+    base = getattr(dtype, "type", dtype)
+    if base in (float, np.float64):
+        return float
+    if base in (int, np.int64):
+        return int
+    raise TypeError(dtype)
+
+
+def ctype(dtype: Any) -> type[ctypes.c_double] | type[ctypes.c_int64]:
+    base = normalize_dtype(dtype)
+    if base is float:
         return ctypes.c_double
-    if dtype is int:
+    if base is int:
         return ctypes.c_int64
     raise TypeError(dtype)
 
 
+class Storage:
+    __slots__ = ("dtype", "ctype", "buffer", "numel", "itemsize", "ptr")
+
+    def __init__(self, numel: int, dtype: Any = float, *, fill: float | int | None = None) -> None:
+        self.dtype = normalize_dtype(dtype)
+        self.ctype = ctype(self.dtype)
+        self.numel = numel
+        self.itemsize = ctypes.sizeof(self.ctype)
+        self.buffer = (self.ctype * numel)()
+        self.ptr = ctypes.addressof(self.buffer)
+        if fill not in (None, 0, 0.0):
+            for i in range(numel):
+                self.buffer[i] = fill
+
+
 class Tensor:
-    __slots__ = ("shape", "dtype", "_ctype", "_buf", "_offset", "_size")
+    __slots__ = ("shape", "dtype", "storage", "offset", "numel", "itemsize", "ptr")
 
     def __init__(
         self,
         shape: tuple[int, ...],
-        dtype: type[float] | type[int] = float,
+        dtype: Any = float,
         *,
-        buffer: Any = None,
+        storage: Storage | None = None,
         offset: int = 0,
         fill: float | int | None = None,
     ) -> None:
         self.shape = tuple(shape)
-        self.dtype = dtype
-        self._ctype = ctype(dtype)
-        self._offset = offset
-        self._size = prod(self.shape)
-        self._buf = (self._ctype * self._size)() if buffer is None else buffer
-        if buffer is None and fill not in (None, 0, 0.0):
-            for i in range(self._size):
-                self._buf[i] = fill
+        self.dtype = normalize_dtype(dtype)
+        self.numel = prod(self.shape)
+        self.storage = storage if storage is not None else Storage(self.numel, self.dtype, fill=fill)
+        if self.storage.dtype is not self.dtype:
+            raise TypeError((self.storage.dtype, self.dtype))
+        if offset < 0 or offset + self.numel > self.storage.numel:
+            raise ValueError((offset, self.numel, self.storage.numel))
+        self.offset = offset
+        self.itemsize = self.storage.itemsize
+        self.ptr = self.storage.ptr + offset * self.itemsize
 
     @property
     def ctypes(self) -> Ptr:
-        return Ptr(ctypes.addressof(self._buf) + self._offset * ctypes.sizeof(self._ctype))
-
-    @property
-    def ptr(self) -> int:
-        return self.ctypes.data
-
-    @property
-    def numel(self) -> int:
-        return self._size
-
-    @property
-    def itemsize(self) -> int:
-        return ctypes.sizeof(self._ctype)
+        return Ptr(self.ptr)
 
     def view(self, shape: tuple[int, ...], *, offset: int = 0) -> Tensor:
-        # shared-buffer view starting at element offset
-        return Tensor(shape, dtype=self.dtype, buffer=self._buf, offset=self._offset + offset)
+        return Tensor(shape, dtype=self.dtype, storage=self.storage, offset=self.offset + offset)
 
     def flat_index(self, key: int | tuple[int, ...]) -> int:
         if not isinstance(key, tuple):
@@ -69,52 +84,27 @@ class Tensor:
         if len(key) != len(self.shape):
             raise IndexError(key)
         if len(key) == 1:
-            return self._offset + key[0]
+            return self.offset + key[0]
         if len(key) == 2:
-            return self._offset + key[0] * self.shape[1] + key[1]
+            return self.offset + key[0] * self.shape[1] + key[1]
         if len(key) == 3:
-            return self._offset + (key[0] * self.shape[1] + key[1]) * self.shape[2] + key[2]
+            return self.offset + (key[0] * self.shape[1] + key[1]) * self.shape[2] + key[2]
         raise ValueError(self.shape)
 
     def __getitem__(self, key: int | tuple[int, ...]) -> float | int:
-        return self._buf[self.flat_index(key)]
+        return self.storage.buffer[self.flat_index(key)]
 
     def __setitem__(self, key: int | tuple[int, ...], value: float | int) -> None:
-        self._buf[self.flat_index(key)] = value
+        self.storage.buffer[self.flat_index(key)] = value
 
 
-def empty(shape: tuple[int, ...], dtype: type[float] | type[int] = float) -> Tensor:
-    # allocate uninitialized storage
+def empty(shape: tuple[int, ...], dtype: Any = float) -> Tensor:
     return Tensor(shape, dtype=dtype)
 
 
-def full(shape: tuple[int, ...], fill_value: float | int, dtype: type[float] | type[int] = float) -> Tensor:
-    # allocate and fill with a scalar
+def full(shape: tuple[int, ...], fill_value: float | int, dtype: Any = float) -> Tensor:
     return Tensor(shape, dtype=dtype, fill=fill_value)
 
 
-def zeros(shape: tuple[int, ...], dtype: type[float] | type[int] = float) -> Tensor:
-    # allocate and fill with 0
-    return full(shape, 0.0 if dtype is float else 0, dtype=dtype)
-
-
-def zeros_like(x: Tensor) -> Tensor:
-    # allocate zeros with x.shape and x.dtype
-    return zeros(x.shape, dtype=x.dtype)
-
-
-def alloc_layout(spec: dict[str, tuple[int, ...]], dtype: type[float] | type[int] = float) -> tuple[Tensor, dict[str, Tensor]]:
-    # allocate one flat buffer and typed views over it
-    total = sum(prod(shape) for shape in spec.values())
-    flat = empty((total,), dtype=dtype)
-    return flat, view_layout(flat, spec)
-
-
-def view_layout(flat: Tensor, spec: dict[str, tuple[int, ...]]) -> dict[str, Tensor]:
-    # create named views over an existing flat buffer
-    offset = 0
-    views = {}
-    for name, shape in spec.items():
-        views[name] = flat.view(shape, offset=offset)
-        offset += prod(shape)
-    return views
+def zeros(shape: tuple[int, ...], dtype: Any = float) -> Tensor:
+    return full(shape, 0.0 if normalize_dtype(dtype) is float else 0, dtype=dtype)
