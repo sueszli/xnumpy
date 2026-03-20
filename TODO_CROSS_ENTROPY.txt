@@ -21,7 +21,34 @@ This computes: grad = (softmax_probs * scale) - one_hot_target * inv_sum_mask[0]
 Implementation Plan
 -------------------
 
-1. Add `cross_entropy_bwd` kernel to utils/exo_kernels.py:
+1. Append `cross_entropy` and `cross_entropy_bwd` kernels to the end of utils/exo_kernels.py:
+
+   @proc
+   def cross_entropy(M: size, N: size, loss: f64[1] @ DRAM, probs: f64[M, N] @ DRAM, target_ids: size[M] @ DRAM, loss_mask: f64[M] @ DRAM, inv_sum_mask: f64[1] @ DRAM):
+       """
+       Compute cross-entropy loss from softmax probabilities.
+       
+       Args:
+           M: batch size (BLOCK_SIZE)
+           N: vocab size
+           loss: output scalar loss [1]
+           probs: softmax probabilities [M, N] (input, not modified)
+           target_ids: target token ids [M]
+           loss_mask: mask for valid positions [M]
+           inv_sum_mask: 1.0 / num_valid_positions
+       
+       Computes: loss = -inv_sum_mask * sum_t(loss_mask[t] * log(probs[t, target_ids[t]]))
+       """
+       total: f64 @ Stack
+       total = 0.0
+       for t in seq(0, M):
+           p_target: f64 @ Stack
+           p_target = 0.0
+           for v_idx in seq(0, N):
+               if v_idx == target_ids[t]:
+                   p_target = probs[t, v_idx]
+           total += loss_mask[t] * log(p_target + 1e-10)
+       loss[0] = -inv_sum_mask[0] * total
 
    @proc
    def cross_entropy_bwd(M: size, N: size, probs: f64[M, N] @ DRAM, target_ids: size[M] @ DRAM, loss_mask: f64[M] @ DRAM, inv_sum_mask: f64[1] @ DRAM):
@@ -49,7 +76,7 @@ Implementation Plan
                    probs[t, v_idx] += -inv_sum_mask[0] * loss_mask[t]
 
 2. Update imports in bench_exojit.py (line 18):
-   from utils.exo_kernels import adam, add, cross_entropy_bwd, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd, softmax
+   from utils.exo_kernels import adam, add, cross_entropy, cross_entropy_bwd, matmul, matmul_left_t, matmul_right_t, relu, relu_bwd, rmsnorm, rmsnorm_bwd, softmax
 
 3. Refactor `lm_head_step_fused` into `lm_head_fwd` and `lm_head_bwd`:
 
@@ -72,14 +99,16 @@ Implementation Plan
 
 Benefits
 --------
-- Reusable cross-entropy gradient kernel for other models
+- Reusable cross-entropy kernels (forward + backward) for other models
 - Clearer separation of concerns
-- Easier to benchmark cross-entropy in isolation
+- `cross_entropy` enables loss tracking for logging/debugging
+- `cross_entropy_bwd` can be benchmarked independently
 - Can be composed with different output layers
 
 
 Notes
 -----
-- The kernel operates in-place on the softmax probabilities
+- `cross_entropy_bwd` operates in-place on the softmax probabilities
 - loss_mask handles variable-length sequences
 - inv_sum_mask enables proper averaging over valid positions
+- Add `log` to exo_kernels.py imports: `from exo.libs.externs import expf, log, select, sqrt`

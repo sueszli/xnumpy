@@ -5,10 +5,9 @@ import random
 import sys
 import time
 from collections import namedtuple
+from dataclasses import dataclass
 from math import prod
 from pathlib import Path
-
-import numpy as np
 
 repo = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo))
@@ -23,68 +22,28 @@ from exojit.main import jit
 from exojit.patches_exo import Stack
 
 
-class Tensor:
-    __slots__ = ("shape", "dtype", "_buf", "_off", "numel", "itemsize", "ptr")
+@dataclass(slots=True)
+class Buf:
+    ptr: int
+    _a: object
+    _o: int
+    n: int
 
-    def __init__(self, shape, dtype=float, _buf=None, _off=0, fill=None):
-        self.shape = tuple(shape)
-        self.dtype = float if dtype in (float, np.float64) else int
-        self.numel = prod(self.shape)
-        ctype = ctypes.c_double if self.dtype is float else ctypes.c_int64
-        self.itemsize = ctypes.sizeof(ctype)
+    def __init__(self, n, dtype=float, _a=None, _o=0):
+        ct = ctypes.c_double if dtype is float else ctypes.c_int64
+        self._a = (ct * n)() if _a is None else _a
+        self._o = _o
+        self.n = n
+        self.ptr = ctypes.addressof(self._a) + _o * 8
 
-        if _buf is None:
-            self._buf = (ctype * self.numel)()
-            self._off = 0
-        else:
-            self._buf = _buf
-            self._off = _off
+    def view(self, n, off=0):
+        return Buf(n, float, self._a, self._o + off)
 
-        self.ptr = ctypes.addressof(self._buf) + self._off * self.itemsize
+    def __getitem__(self, i):
+        return self._a[self._o + i]
 
-        if fill not in (None, 0, 0.0):
-            for i in range(self.numel):
-                self._buf[self._off + i] = fill
-
-    def view(self, shape, *, offset=0):
-        return Tensor(shape, dtype=self.dtype, _buf=self._buf, _off=self._off + offset)
-
-    def __getitem__(self, key):
-        if isinstance(key, tuple):
-            if len(key) == 1:
-                idx = key[0]
-            elif len(key) == 2:
-                idx = key[0] * self.shape[1] + key[1]
-            elif len(key) == 3:
-                idx = (key[0] * self.shape[1] + key[1]) * self.shape[2] + key[2]
-            else:
-                raise ValueError(key)
-        else:
-            idx = key
-        return self._buf[self._off + idx]
-
-    def __setitem__(self, key, value):
-        if isinstance(key, tuple):
-            if len(key) == 1:
-                idx = key[0]
-            elif len(key) == 2:
-                idx = key[0] * self.shape[1] + key[1]
-            elif len(key) == 3:
-                idx = (key[0] * self.shape[1] + key[1]) * self.shape[2] + key[2]
-            else:
-                raise ValueError(key)
-        else:
-            idx = key
-        self._buf[self._off + idx] = value
-
-
-def empty(shape, dtype=float):
-    return Tensor(shape, dtype=dtype)
-
-
-def zeros(shape, dtype=float):
-    dtype = float if dtype in (float, np.float64) else int
-    return Tensor(shape, dtype=dtype, fill=0 if dtype is int else 0.0)
+    def __setitem__(self, i, v):
+        self._a[self._o + i] = v
 
 
 N_EMBED = 16
@@ -276,34 +235,30 @@ def bwd(vocab_size: size, dx1: f64[BLOCK_SIZE, N_EMBED] @ DRAM, g_lm_head: f64[v
     embed_rms_bwd(vocab_size, g_wte, g_wpe, dx1, emb, rms_init, inv_n, input_ids)
 
 
-PARAMS_FIELDS = ("wte", "wpe", "lm_head", "attn_wq", "attn_wk", "attn_wv", "attn_wo", "mlp_fc1", "mlp_fc2")
-SCRATCH_FIELDS = ("emb", "rms_init", "x0", "x1", "logits", "attn_xn", "attn_rms", "q", "k", "v", "attn_w", "out_flat", "mlp_xn", "mlp_rms", "h_pre", "h", "dh", "dh_pre", "dx0", "dx1", "dattn_out")
-SCALARS_FIELDS = ("opt_lr", "opt_bc1", "opt_bc2", "rms_inv_n")
+PARAMS_FIELDS = "wte wpe lm_head attn_wq attn_wk attn_wv attn_wo mlp_fc1 mlp_fc2".split()
+SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w out_flat mlp_xn mlp_rms h_pre h dh dh_pre dx0 dx1 dattn_out".split()
+SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2 rms_inv_n".split()
 
 
-def init_normal_(tensor: Tensor, *, scale: float) -> None:
-    flat = tensor.view((tensor.numel,))
-    for i in range(tensor.numel):
-        flat[i] = random.gauss(0.0, scale)
+def init_normal_(buf: Buf, *, scale: float):
+    for i in range(buf.n):
+        buf[i] = random.gauss(0.0, scale)
 
 
-SCALAR_LAYOUT = ((1,), (1,), (1,), (1,))
+def layout_numel(layout):
+    return sum(prod(s) for s in layout)
 
 
-def layout_numel(layout: tuple[tuple[int, ...], ...]) -> int:
-    return sum(prod(shape) for shape in layout)
-
-
-def bind_layout(fields: tuple[str, ...], flat: Tensor, layout: tuple[tuple[int, ...], ...]) -> dict[str, Tensor]:
-    offset = 0
-    result = {}
+def bind(fields, flat, layout):
+    off = 0
+    d = {}
     for name, shape in zip(fields, layout):
-        result[name] = flat.view(shape, offset=offset)
-        offset += prod(shape)
-    return result
+        d[name] = flat.view(prod(shape), off)
+        off += prod(shape)
+    return d
 
 
-def scratch_layout(vocab_size: int) -> tuple[tuple[int, ...], ...]:
+def scratch_layout(vocab_size):
     return (
         (BLOCK_SIZE, N_EMBED),
         (BLOCK_SIZE, 1),
@@ -329,31 +284,22 @@ def scratch_layout(vocab_size: int) -> tuple[tuple[int, ...], ...]:
     )
 
 
-def named_params(params: dict[str, Tensor]) -> tuple[tuple[str, Tensor], ...]:
-    return (
-        ("wte", params["wte"]),
-        ("wpe", params["wpe"]),
-        ("lm_head", params["lm_head"]),
-        ("layer0.attn_wq", params["attn_wq"]),
-        ("layer0.attn_wk", params["attn_wk"]),
-        ("layer0.attn_wv", params["attn_wv"]),
-        ("layer0.attn_wo", params["attn_wo"]),
-        ("layer0.mlp_fc1", params["mlp_fc1"]),
-        ("layer0.mlp_fc2", params["mlp_fc2"]),
-    )
+def named_params(params, layout):
+    names = ("wte", "wpe", "lm_head", "layer0.attn_wq", "layer0.attn_wk", "layer0.attn_wv", "layer0.attn_wo", "layer0.mlp_fc1", "layer0.mlp_fc2")
+    return [(n, params[PARAMS_FIELDS[i]], layout[i][1]) for i, n in enumerate(names)]
 
 
-def tokenize(doc: str, c2i: dict[str, int], bos: int) -> dict[str, Tensor]:
+def tokenize(doc, c2i, bos):
     tokens = [bos] + [c2i[ch] for ch in doc] + [bos]
     n = min(BLOCK_SIZE, len(tokens) - 1)
-    inputs = zeros((BLOCK_SIZE,), dtype=int)
-    targets = zeros((BLOCK_SIZE,), dtype=int)
-    loss_mask = zeros((BLOCK_SIZE,))
+    inputs = Buf(BLOCK_SIZE, int)
+    targets = Buf(BLOCK_SIZE, int)
+    loss_mask = Buf(BLOCK_SIZE)
     for i in range(n):
         inputs[i] = tokens[i]
         targets[i] = tokens[i + 1]
         loss_mask[i] = 1.0
-    inv_sum_mask = empty((1,))
+    inv_sum_mask = Buf(1)
     inv_sum_mask[0] = 1.0 / max(1, n)
     return {"input_ids": inputs, "target_ids": targets, "loss_mask": loss_mask, "inv_sum_mask": inv_sum_mask}
 
@@ -380,27 +326,27 @@ if __name__ == "__main__":
         (4 * N_EMBED, N_EMBED),
         (N_EMBED, 4 * N_EMBED),
     )
-    flat_params = empty((layout_numel(params_layout),))
-    params = bind_layout(PARAMS_FIELDS, flat_params, params_layout)
-    for _, tensor in named_params(params):
-        init_normal_(tensor, scale=0.08)
+    flat_params = Buf(layout_numel(params_layout))
+    params = bind(PARAMS_FIELDS, flat_params, params_layout)
+    for name, buf, _ in named_params(params, params_layout):
+        init_normal_(buf, scale=0.08)
 
-    flat_grads = zeros((flat_params.numel,))
-    grads = bind_layout(PARAMS_FIELDS, flat_grads, params_layout)
-    opt_state = {"m": zeros((flat_params.numel,)), "v": zeros((flat_params.numel,))}
+    flat_grads = Buf(flat_params.n)
+    grads = bind(PARAMS_FIELDS, flat_grads, params_layout)
+    opt_state = {"m": Buf(flat_params.n), "v": Buf(flat_params.n)}
 
-    scratch = bind_layout(SCRATCH_FIELDS, empty((layout_numel(scratch_layout(vocab_size)),)), scratch_layout(vocab_size))
-    scalars = bind_layout(SCALARS_FIELDS, empty((layout_numel(SCALAR_LAYOUT),)), SCALAR_LAYOUT)
+    scratch = bind(SCRATCH_FIELDS, Buf(layout_numel(scratch_layout(vocab_size))), scratch_layout(vocab_size))
+    scalars = bind(SCALARS_FIELDS, Buf(4), ((1,), (1,), (1,), (1,)))
     scalars["rms_inv_n"][0] = 1.0 / N_EMBED
 
-    adam_step = jit(simplify(adam.partial_eval(N=flat_params.numel)))._raw
+    adam_step = jit(simplify(adam.partial_eval(N=flat_params.n)))._raw
 
     c2i = {ch: i for i, ch in enumerate(uchars)}
     bos = vocab_size - 1
     tokenized = [tokenize(doc, c2i, bos) for doc in docs]
 
-    g_wte_bytes = grads["wte"].numel * grads["wte"].itemsize
-    g_wpe_bytes = grads["wpe"].numel * grads["wpe"].itemsize
+    g_wte_bytes = grads["wte"].n * 8
+    g_wpe_bytes = grads["wpe"].n * 8
     lr_t = [0.01 * (1.0 - step / num_steps) for step in range(num_steps)]
     bc1 = [1.0 - 0.85 ** (step + 1) for step in range(num_steps)]
     bc2 = [1.0 - 0.99 ** (step + 1) for step in range(num_steps)]
@@ -427,4 +373,4 @@ if __name__ == "__main__":
 
     save_times(step_times)
     W = namedtuple("W", ["data"])
-    assert_weights_match({name: [[W(float(tensor[i, j])) for j in range(tensor.shape[1])] for i in range(tensor.shape[0])] for name, tensor in named_params(params)})
+    assert_weights_match({name: [[W(float(buf[i * cols + j])) for j in range(cols)] for i in range(buf.n // cols)] for name, buf, cols in named_params(params, params_layout)})
