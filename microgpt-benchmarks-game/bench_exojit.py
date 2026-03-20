@@ -390,7 +390,7 @@ def lm_head_layer(vocab_size: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight
 
 
 #
-# Train Loop
+# train loop
 #
 
 
