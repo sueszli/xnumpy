@@ -11,7 +11,8 @@ from operator import mul
 from pathlib import Path
 
 from tqdm import tqdm
-from utils import assert_weights_match, save_times
+from utils.times import save_times
+from utils.weights import assert_weights_match
 
 random.seed(42)
 

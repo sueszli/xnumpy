@@ -11,7 +11,8 @@ import random
 import time
 from pathlib import Path
 
-from utils import dump_weights, save_times
+from utils.times import save_times
+from utils.weights import dump_weights
 
 random.seed(42)
 

@@ -8,4 +8,4 @@ uv run bench_numpy.py
 uv run bench_torch.py
 uv run bench_jax.py
 
-uv run utils.py
+uv run utils/times.py

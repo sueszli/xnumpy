@@ -9,7 +9,8 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from utils import assert_weights_match, save_times
+from utils.times import save_times
+from utils.weights import assert_weights_match
 
 random.seed(42)
 

@@ -3,6 +3,8 @@
 # dependencies = []
 # ///
 
+from __future__ import annotations
+
 import ctypes
 import random
 import sys
@@ -10,16 +12,18 @@ import time
 from pathlib import Path
 
 repo = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo / "exonp"))
 sys.path.insert(0, str(repo))
 
 from exo import *
 from exo.libs.externs import expf, select, sqrt
 from exo.stdlib.scheduling import simplify
-from utils import assert_weights_match, save_times
+from utils.exo_alloc import Tensor, empty, full, normal, reshape, zeros, zeros_like
+from utils.exo_kernels import add, fill, fill3, matmul, matmul_left_t, matmul_right_t, relu, rmsnorm, rmsnorm_bwd
+from utils.times import save_times
+from utils.weights import assert_weights_match
 
-import exonp as xnp
 from exojit.main import jit
+from exojit.patches_exo import Stack
 
 N_EMBED = 16
 BLOCK_SIZE = 16
@@ -29,30 +33,30 @@ INV_SCALE = 1.0 / HEAD_DIM**0.5
 CAUSAL_MASK_VALUE = -1e10
 
 
-def pack_tensors(tensors: dict[str, xnp.Tensor]) -> tuple[xnp.Tensor, dict[str, xnp.Tensor], int]:
+def pack_tensors(tensors: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor], int]:
     total = sum(t._size for t in tensors.values())
-    flat = xnp.empty((total,), dtype=float)
+    flat = empty((total,), dtype=float)
     flat_ptr = flat.ctypes.data
     elt_bytes = ctypes.sizeof(flat._ctype)
     views = {}
     offset = 0
     for name, tensor in tensors.items():
         ctypes.memmove(flat_ptr + offset * elt_bytes, tensor.ctypes.data, tensor._size * elt_bytes)
-        views[name] = xnp.reshape(flat, tensor.shape, offset=offset)
+        views[name] = reshape(flat, tensor.shape, offset=offset)
         offset += tensor._size
     return flat, views, elt_bytes
 
 
-def view_tensors(flat: xnp.Tensor, tensors: dict[str, xnp.Tensor]) -> dict[str, xnp.Tensor]:
+def view_tensors(flat: Tensor, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
     views = {}
     offset = 0
     for name, tensor in tensors.items():
-        views[name] = xnp.reshape(flat, tensor.shape, offset=offset)
+        views[name] = reshape(flat, tensor.shape, offset=offset)
         offset += tensor._size
     return views
 
 
-def tensor_ptrs(tensors: dict[str, xnp.Tensor]) -> dict[str, int]:
+def tensor_ptrs(tensors: dict[str, Tensor]) -> dict[str, int]:
     return {name: tensor.ctypes.data for name, tensor in tensors.items()}
 
 
@@ -66,16 +70,16 @@ def embed_token(V: size, emb_row: [f64][N_EMBED] @ DRAM, wte: f64[V, N_EMBED] @ 
 @proc
 def embed_rms_bwd_token(V: size, g_wte: f64[V, N_EMBED] @ DRAM, g_wpe_row: [f64][N_EMBED] @ DRAM, dout_row: [f64][N_EMBED] @ DRAM, x_row: [f64][N_EMBED] @ DRAM, rms_row: [f64][1] @ DRAM, zero: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, input: size):
     assert input < V
-    dot: f64 @ xnp.Stack
-    scale: f64 @ xnp.Stack
-    corr: f64 @ xnp.Stack
+    dot: f64 @ Stack
+    scale: f64 @ Stack
+    corr: f64 @ Stack
     dot = zero[0]
     scale = rms_row[0]
     for e in seq(0, N_EMBED):
         dot += dout_row[e] * x_row[e]
     corr = scale * scale * scale * inv_n[0] * dot
     for e in seq(0, N_EMBED):
-        dx: f64 @ xnp.Stack
+        dx: f64 @ Stack
         dx = dout_row[e] * scale - x_row[e] * corr
         g_wte[input, e] += dx
         g_wpe_row[e] = dx
@@ -84,11 +88,11 @@ def embed_rms_bwd_token(V: size, g_wte: f64[V, N_EMBED] @ DRAM, g_wpe_row: [f64]
 @proc
 def softmax_xent_row(V: size, row: [f64][V] @ DRAM, loss: [f64][1] @ DRAM, inv_sum_mask: f64[1] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, target: size):
     assert target < V
-    mx: f64 @ xnp.Stack
-    sum_val: f64 @ xnp.Stack
-    scale: f64 @ xnp.Stack
-    val: f64 @ xnp.Stack
-    inv_denom: f64 @ xnp.Stack
+    mx: f64 @ Stack
+    sum_val: f64 @ Stack
+    scale: f64 @ Stack
+    val: f64 @ Stack
+    inv_denom: f64 @ Stack
     mx = row[0]
     for v_idx in seq(1, V):
         mx = select(mx, row[v_idx], row[v_idx], mx)
@@ -106,14 +110,14 @@ def softmax_xent_row(V: size, row: [f64][V] @ DRAM, loss: [f64][1] @ DRAM, inv_s
 
 @proc
 def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
-    xnp.rmsnorm(BLOCK_SIZE, N_EMBED, xn, rms, x, zero, one, inv_n, eps)
+    rmsnorm(BLOCK_SIZE, N_EMBED, xn, rms, x, zero, one, inv_n, eps)
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
             for d in seq(0, HEAD_DIM):
-                acc_q: f64 @ xnp.Stack
-                acc_k: f64 @ xnp.Stack
-                acc_v: f64 @ xnp.Stack
+                acc_q: f64 @ Stack
+                acc_k: f64 @ Stack
+                acc_v: f64 @ Stack
                 acc_q = 0.0
                 acc_k = 0.0
                 acc_v = 0.0
@@ -127,10 +131,10 @@ def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_E
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
-            mx: f64 @ xnp.Stack
-            sum_val: f64 @ xnp.Stack
-            logit: f64 @ xnp.Stack
-            t0: f64 @ xnp.Stack
+            mx: f64 @ Stack
+            sum_val: f64 @ Stack
+            logit: f64 @ Stack
+            t0: f64 @ Stack
 
             mx = CAUSAL_MASK_VALUE
             for s in seq(0, BLOCK_SIZE):
@@ -156,35 +160,35 @@ def attn_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_E
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
             for d in seq(0, HEAD_DIM):
-                acc: f64 @ xnp.Stack
+                acc: f64 @ Stack
                 acc = 0.0
                 for s in seq(0, BLOCK_SIZE):
                     acc += attn_w[h, t, s] * v[h, s, d]
                 out_flat[t, h * HEAD_DIM + d] = acc
 
-    xnp.matmul_right_t(BLOCK_SIZE, N_EMBED, N_EMBED, out, out_flat, wo, zero)
-    xnp.add(BLOCK_SIZE, N_EMBED, out, x)
+    matmul_right_t(BLOCK_SIZE, N_EMBED, N_EMBED, out, out_flat, wo, zero)
+    add(BLOCK_SIZE, N_EMBED, out, x)
 
 
 @proc
 def mlp_fwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, h: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, x: f64[BLOCK_SIZE, N_EMBED] @ DRAM, fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM, fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, zero: f64[1] @ DRAM, one: f64[1] @ DRAM, inv_n: f64[1] @ DRAM, eps: f64[1] @ DRAM):
-    xnp.rmsnorm(BLOCK_SIZE, N_EMBED, xn, rms, x, zero, one, inv_n, eps)
-    xnp.matmul_right_t(BLOCK_SIZE, 4 * N_EMBED, N_EMBED, h_pre, xn, fc1, zero)
-    xnp.relu(BLOCK_SIZE, 4 * N_EMBED, h, h_pre, zero)
-    xnp.matmul_right_t(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, out, h, fc2, zero)
-    xnp.add(BLOCK_SIZE, N_EMBED, out, x)
+    rmsnorm(BLOCK_SIZE, N_EMBED, xn, rms, x, zero, one, inv_n, eps)
+    matmul_right_t(BLOCK_SIZE, 4 * N_EMBED, N_EMBED, h_pre, xn, fc1, zero)
+    relu(BLOCK_SIZE, 4 * N_EMBED, h, h_pre, zero)
+    matmul_right_t(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, out, h, fc2, zero)
+    add(BLOCK_SIZE, N_EMBED, out, x)
 
 
 @proc
 def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_EMBED] @ DRAM, dw2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, h_pre: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, h: f64[BLOCK_SIZE, 4 * N_EMBED] @ DRAM, fc1: f64[4 * N_EMBED, N_EMBED] @ DRAM, fc2: f64[N_EMBED, 4 * N_EMBED] @ DRAM, zero: f64[1] @ DRAM, inv_n: f64[1] @ DRAM):
-    xnp.fill(BLOCK_SIZE, N_EMBED, out, zero)
-    xnp.matmul_left_t(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, dw2, dx, h, zero)
-    xnp.fill(4 * N_EMBED, N_EMBED, dw1, zero)
+    fill(BLOCK_SIZE, N_EMBED, out, zero)
+    matmul_left_t(BLOCK_SIZE, N_EMBED, 4 * N_EMBED, dw2, dx, h, zero)
+    fill(4 * N_EMBED, N_EMBED, dw1, zero)
 
     for t in seq(0, BLOCK_SIZE):
         for e in seq(0, 4 * N_EMBED):
-            dh: f64 @ xnp.Stack
-            dh_pre: f64 @ xnp.Stack
+            dh: f64 @ Stack
+            dh_pre: f64 @ Stack
             dh = 0.0
             for j in seq(0, N_EMBED):
                 dh += dx[t, j] * fc2[j, e]
@@ -193,26 +197,26 @@ def mlp_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dw1: f64[4 * N_EMBED, N_
                 dw1[e, k] += dh_pre * xn[t, k]
                 out[t, k] += dh_pre * fc1[e, k]
 
-    xnp.rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
+    rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
 
 
 @proc
 def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, b1: f64[1] @ DRAM, b2: f64[1] @ DRAM, eps: f64[1] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM):
-    inv_b1: f64 @ xnp.Stack
-    inv_b2: f64 @ xnp.Stack
-    inv_beta1_t: f64 @ xnp.Stack
-    inv_beta2_t: f64 @ xnp.Stack
+    inv_b1: f64 @ Stack
+    inv_b2: f64 @ Stack
+    inv_beta1_t: f64 @ Stack
+    inv_beta2_t: f64 @ Stack
     inv_b1 = 1.0 - b1[0]
     inv_b2 = 1.0 - b2[0]
     inv_beta1_t = 1.0 / beta1_t[0]
     inv_beta2_t = 1.0 / beta2_t[0]
 
     for i in seq(0, N):
-        g: f64 @ xnp.Stack
-        m_val: f64 @ xnp.Stack
-        v_val: f64 @ xnp.Stack
-        m_hat: f64 @ xnp.Stack
-        v_hat: f64 @ xnp.Stack
+        g: f64 @ Stack
+        m_val: f64 @ Stack
+        v_val: f64 @ Stack
+        m_hat: f64 @ Stack
+        v_hat: f64 @ Stack
         g = grad[i]
         m_val = b1[0] * m[i] + inv_b1 * g
         v_val = b2[0] * v[i] + inv_b2 * g * g
@@ -225,15 +229,15 @@ def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v
 
 @proc
 def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMBED] @ DRAM, dwk: f64[N_EMBED, N_EMBED] @ DRAM, dwv: f64[N_EMBED, N_EMBED] @ DRAM, dwo: f64[N_EMBED, N_EMBED] @ DRAM, dattn_out: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, x_pre: f64[BLOCK_SIZE, N_EMBED] @ DRAM, xn: f64[BLOCK_SIZE, N_EMBED] @ DRAM, rms: f64[BLOCK_SIZE, 1] @ DRAM, q: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, k: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, v: f64[N_HEAD, BLOCK_SIZE, HEAD_DIM] @ DRAM, attn_w: f64[N_HEAD, BLOCK_SIZE, BLOCK_SIZE] @ DRAM, out_flat: f64[BLOCK_SIZE, N_EMBED] @ DRAM, wq: f64[N_EMBED, N_EMBED] @ DRAM, wk: f64[N_EMBED, N_EMBED] @ DRAM, wv: f64[N_EMBED, N_EMBED] @ DRAM, wo: f64[N_EMBED, N_EMBED] @ DRAM, zero: f64[1] @ DRAM, inv_n: f64[1] @ DRAM):
-    attn_tmp: f64[BLOCK_SIZE] @ xnp.Stack
-    xnp.fill(BLOCK_SIZE, N_EMBED, out, zero)
-    xnp.matmul_left_t(BLOCK_SIZE, N_EMBED, N_EMBED, dwo, dx, out_flat, zero)
-    xnp.fill3(N_EMBED, N_EMBED, dwq, dwk, dwv, zero)
+    attn_tmp: f64[BLOCK_SIZE] @ Stack
+    fill(BLOCK_SIZE, N_EMBED, out, zero)
+    matmul_left_t(BLOCK_SIZE, N_EMBED, N_EMBED, dwo, dx, out_flat, zero)
+    fill3(N_EMBED, N_EMBED, dwq, dwk, dwv, zero)
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
             for d in seq(0, HEAD_DIM):
-                acc: f64 @ xnp.Stack
+                acc: f64 @ Stack
                 acc = 0.0
                 for j in seq(0, N_EMBED):
                     acc += dx[t, j] * wo[j, h * HEAD_DIM + d]
@@ -241,13 +245,13 @@ def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMB
 
     for h in seq(0, N_HEAD):
         for t in seq(0, BLOCK_SIZE):
-            dq_acc: f64[HEAD_DIM] @ xnp.Stack
-            dot: f64 @ xnp.Stack
+            dq_acc: f64[HEAD_DIM] @ Stack
+            dot: f64 @ Stack
             dot = 0.0
             for d in seq(0, HEAD_DIM):
                 dq_acc[d] = 0.0
             for s in seq(0, BLOCK_SIZE):
-                dattn_w: f64 @ xnp.Stack
+                dattn_w: f64 @ Stack
                 dattn_w = 0.0
                 for d in seq(0, HEAD_DIM):
                     dattn_w += dattn_out[h, t, d] * v[h, s, d]
@@ -255,12 +259,12 @@ def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMB
                 dot += dattn_w * attn_w[h, t, s]
 
             for s in seq(0, BLOCK_SIZE):
-                dlogit: f64 @ xnp.Stack
+                dlogit: f64 @ Stack
                 dlogit = attn_w[h, t, s] * (attn_tmp[s] - dot) * INV_SCALE
 
                 for d in seq(0, HEAD_DIM):
-                    dk_contrib: f64 @ xnp.Stack
-                    dv_contrib: f64 @ xnp.Stack
+                    dk_contrib: f64 @ Stack
+                    dv_contrib: f64 @ Stack
                     dq_acc[d] += dlogit * k[h, s, d]
                     dk_contrib = dlogit * q[h, t, d]
                     dv_contrib = attn_w[h, t, s] * dattn_out[h, t, d]
@@ -276,7 +280,7 @@ def attn_bwd_fused(out: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dwq: f64[N_EMBED, N_EMB
                     out[t, e] += dq_acc[d] * wq[h * HEAD_DIM + d, e]
                     dwq[h * HEAD_DIM + d, e] += dq_acc[d] * xn[t, e]
 
-    xnp.rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
+    rmsnorm_bwd(BLOCK_SIZE, N_EMBED, out, dx, x_pre, rms, zero, inv_n)
 
 
 @proc
@@ -297,7 +301,7 @@ def lm_head_step_fused(V: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f6
     assert target13 < V
     assert target14 < V
     assert target15 < V
-    xnp.matmul_right_t(BLOCK_SIZE, V, N_EMBED, logits, x, lm_head, zero)
+    matmul_right_t(BLOCK_SIZE, V, N_EMBED, logits, x, lm_head, zero)
     softmax_xent_row(V, logits[0, :], loss_mask[0:1], inv_sum_mask, zero, one, target0)
     softmax_xent_row(V, logits[1, :], loss_mask[1:2], inv_sum_mask, zero, one, target1)
     softmax_xent_row(V, logits[2, :], loss_mask[2:3], inv_sum_mask, zero, one, target2)
@@ -314,8 +318,8 @@ def lm_head_step_fused(V: size, dx: f64[BLOCK_SIZE, N_EMBED] @ DRAM, dweight: f6
     softmax_xent_row(V, logits[13, :], loss_mask[13:14], inv_sum_mask, zero, one, target13)
     softmax_xent_row(V, logits[14, :], loss_mask[14:15], inv_sum_mask, zero, one, target14)
     softmax_xent_row(V, logits[15, :], loss_mask[15:16], inv_sum_mask, zero, one, target15)
-    xnp.matmul_left_t(BLOCK_SIZE, V, N_EMBED, dweight, logits, x, zero)
-    xnp.matmul(BLOCK_SIZE, N_EMBED, V, dx, logits, lm_head, zero)
+    matmul_left_t(BLOCK_SIZE, V, N_EMBED, dweight, logits, x, zero)
+    matmul(BLOCK_SIZE, N_EMBED, V, dx, logits, lm_head, zero)
 
 
 @proc
@@ -352,7 +356,7 @@ def embed_rms_fwd_tokens(V: size, emb: f64[BLOCK_SIZE, N_EMBED] @ DRAM, out: f64
     embed_token(V, emb[13, :], wte, wpe[13, :], input13)
     embed_token(V, emb[14, :], wte, wpe[14, :], input14)
     embed_token(V, emb[15, :], wte, wpe[15, :], input15)
-    xnp.rmsnorm(BLOCK_SIZE, N_EMBED, out, rms, emb, zero, one, inv_n, eps)
+    rmsnorm(BLOCK_SIZE, N_EMBED, out, rms, emb, zero, one, inv_n, eps)
 
 
 @proc
@@ -397,12 +401,12 @@ def tokenize(doc: str, c2i: dict[str, int], bos: int, ptrs: dict[str, dict[str, 
     n = min(BLOCK_SIZE, len(tokens) - 1)
     inputs = [0] * BLOCK_SIZE
     targets = [0] * BLOCK_SIZE
-    loss_mask = xnp.zeros((BLOCK_SIZE,), dtype=float)
+    loss_mask = zeros((BLOCK_SIZE,), dtype=float)
     for i in range(n):
         inputs[i] = tokens[i]
         targets[i] = tokens[i + 1]
         loss_mask[i] = 1.0
-    inv_sum_mask = xnp.full((1,), 1.0 / max(1, n), dtype=float)
+    inv_sum_mask = full((1,), 1.0 / max(1, n), dtype=float)
     return (
         (s["emb"], s["x0"], s["rms_init"], p["wte"], p["wpe"], zero_ptr, one_ptr, rms_inv_n_ptr, rms_eps_ptr, *inputs),
         (s["dx1"], g["lm_head"], s["logits"], s["dx0"], p["lm_head"], loss_mask.ctypes.data, inv_sum_mask.ctypes.data, zero_ptr, one_ptr, *targets),
@@ -412,7 +416,7 @@ def tokenize(doc: str, c2i: dict[str, int], bos: int, ptrs: dict[str, dict[str, 
     )
 
 
-def wrap_state_dict(state_dict: dict[str, xnp.Tensor]) -> dict[str, list[list[object]]]:
+def wrap_state_dict(state_dict: dict[str, Tensor]) -> dict[str, list[list[object]]]:
     class W:
         __slots__ = ("data",)
 
@@ -434,9 +438,9 @@ def main() -> None:
     vocab_size = len(uchars) + 1
 
     state_dict = {
-        "wte": xnp.normal((vocab_size, N_EMBED), scale=0.08),
-        "wpe": xnp.normal((BLOCK_SIZE, N_EMBED), scale=0.08),
-        "lm_head": xnp.normal((vocab_size, N_EMBED), scale=0.08),
+        "wte": normal((vocab_size, N_EMBED), scale=0.08),
+        "wpe": normal((BLOCK_SIZE, N_EMBED), scale=0.08),
+        "lm_head": normal((vocab_size, N_EMBED), scale=0.08),
     }
     for i in range(n_layer):
         prefix = f"layer{i}"
@@ -448,17 +452,17 @@ def main() -> None:
             ("mlp_fc1", (4 * N_EMBED, N_EMBED)),
             ("mlp_fc2", (N_EMBED, 4 * N_EMBED)),
         ):
-            state_dict[f"{prefix}.{name}"] = xnp.normal(shape, scale=0.08)
+            state_dict[f"{prefix}.{name}"] = normal(shape, scale=0.08)
 
     flat_params, state_dict, elt_bytes = pack_tensors(state_dict)
-    flat_grads, opt_m, opt_v = xnp.zeros_like(flat_params), xnp.zeros_like(flat_params), xnp.zeros_like(flat_params)
+    flat_grads, opt_m, opt_v = zeros_like(flat_params), zeros_like(flat_params), zeros_like(flat_params)
     grads = view_tensors(flat_grads, state_dict)
 
-    opt_lr, opt_bc1, opt_bc2 = xnp.empty((1,)), xnp.empty((1,)), xnp.empty((1,))
-    zero, one, rms_inv_n, rms_eps, adam_b1, adam_b2, adam_eps = (xnp.full((1,), x) for x in (0.0, 1.0, 1.0 / N_EMBED, 1e-5, 0.85, 0.99, 1e-8))
+    opt_lr, opt_bc1, opt_bc2 = empty((1,)), empty((1,)), empty((1,))
+    zero, one, rms_inv_n, rms_eps, adam_b1, adam_b2, adam_eps = (full((1,), x) for x in (0.0, 1.0, 1.0 / N_EMBED, 1e-5, 0.85, 0.99, 1e-8))
 
     scratch = {
-        name: xnp.empty(shape, dtype=float)
+        name: empty(shape, dtype=float)
         for name, shape in (
             ("emb", (BLOCK_SIZE, N_EMBED)),
             ("rms_init", (BLOCK_SIZE, 1)),
