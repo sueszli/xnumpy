@@ -63,7 +63,6 @@ FCMP_PREDICATES: dict[str, tuple[str, bool]] = {  # mlir predicate -> (op, order
     "uno": ("uno", False),
 }
 
-
 #
 # generate xdsl mlir
 #
@@ -932,19 +931,28 @@ def _load_libomp() -> None:
     llvmlite.binding.load_library_permanently(lib)
 
 
+JIT_SCALAR_TYPES = (LoopIR.Size, LoopIR.Index, LoopIR.Int, LoopIR.Bool, LoopIR.Stride)
+
+
 def _jit_arg_kinds(proc: LoopIR.proc) -> bytes:
     # classify each argument once so the C wrapper can take the cheapest safe path
-    read_only = 1
-    writable = 2
     write_cache: dict[int, frozenset[int]] = {}
     visiting: set[int] = set()
 
     def _aliases(expr: object, alias_map: dict[object, frozenset[int]]) -> frozenset[int]:
-        match expr:
-            case LoopIR.Read() | LoopIR.WindowExpr():
-                return alias_map.get(expr.name, frozenset())
-            case _:
-                return frozenset()
+        return alias_map.get(expr.name, frozenset()) if isinstance(expr, (LoopIR.Read, LoopIR.WindowExpr)) else frozenset()
+
+    def _written_tensor_args(proc_ir: LoopIR.proc) -> frozenset[int]:
+        proc_id = id(proc_ir)
+        if proc_id in write_cache or proc_id in visiting:
+            return write_cache.get(proc_id, frozenset())
+        visiting.add(proc_id)
+        try:
+            arg_aliases = {arg.name: frozenset({i}) for i, arg in enumerate(proc_ir.args) if arg.type.is_tensor_or_window()}
+            write_cache[proc_id] = _walk(proc_ir.body, arg_aliases)
+            return write_cache[proc_id]
+        finally:
+            visiting.remove(proc_id)
 
     def _walk(stmts: list, alias_map: dict[object, frozenset[int]]) -> frozenset[int]:
         alias_map = dict(alias_map)
@@ -955,38 +963,21 @@ def _jit_arg_kinds(proc: LoopIR.proc) -> bytes:
                     written.update(alias_map.get(stmt.name, ()))
                 case LoopIR.WindowStmt():
                     alias_map[stmt.name] = _aliases(stmt.rhs, alias_map)
-                case LoopIR.If():
-                    written.update(_walk(stmt.body, alias_map))
-                    written.update(_walk(stmt.orelse, alias_map))
-                case LoopIR.For():
-                    written.update(_walk(stmt.body, alias_map))
+                case LoopIR.If() | LoopIR.For():
+                    for body in (stmt.body, stmt.orelse) if isinstance(stmt, LoopIR.If) else (stmt.body,):
+                        written.update(_walk(body, alias_map))
                 case LoopIR.Call():
                     for i in _written_tensor_args(stmt.f):
                         written.update(_aliases(stmt.args[i], alias_map))
         return frozenset(written)
-
-    def _written_tensor_args(proc_ir: LoopIR.proc) -> frozenset[int]:
-        proc_id = id(proc_ir)
-        if proc_id in write_cache:
-            return write_cache[proc_id]
-        if proc_id in visiting:
-            return frozenset()
-
-        visiting.add(proc_id)
-        try:
-            arg_aliases = {arg.name: frozenset({i}) for i, arg in enumerate(proc_ir.args) if arg.type.is_tensor_or_window()}
-            write_cache[proc_id] = _walk(proc_ir.body, arg_aliases)
-            return write_cache[proc_id]
-        finally:
-            visiting.remove(proc_id)
 
     written = _written_tensor_args(proc)
 
     def _kind(i: int, arg: object) -> int:
         match arg.type:
             case _ if arg.type.is_tensor_or_window():
-                return writable if i in written else read_only
-            case _ if isinstance(arg.type, (LoopIR.Size, LoopIR.Index, LoopIR.Int, LoopIR.Bool, LoopIR.Stride)):
+                return 2 if i in written else 1
+            case _ if isinstance(arg.type, JIT_SCALAR_TYPES):
                 return 0
             case _:
                 assert False, f"unsupported JIT argument type for {arg.name}: {arg.type}"
@@ -994,26 +985,18 @@ def _jit_arg_kinds(proc: LoopIR.proc) -> bytes:
     return bytes(_kind(i, arg) for i, arg in enumerate(proc.args))
 
 
-def _jit_tensor_c_type(arg_type: object) -> str:
-    # map Exo tensor dtypes to the cffi scalar type used for raw buffers
-    if isinstance(arg_type, T.Window):
-        arg_type = arg_type.as_tensor
-    assert isinstance(arg_type, T.Tensor), f"unsupported JIT tensor type: {arg_type}"
-    tensor_c_types = {
-        "f32": "float",
-        "f64": "double",
-        "i8": "int8_t",
-        "ui8": "uint8_t",
-        "i16": "int16_t",
-        "ui16": "uint16_t",
-        "i32": "int32_t",
-        "index": "int64_t",
-        "size": "int64_t",
-        "bool": "_Bool",
-    }
-    basetype = str(arg_type.basetype())
-    assert basetype in tensor_c_types, f"unsupported JIT tensor dtype: {basetype}"
-    return tensor_c_types[basetype]
+JIT_TENSOR_C_TYPES = {
+    "f32": "float",
+    "f64": "double",
+    "i8": "int8_t",
+    "ui8": "uint8_t",
+    "i16": "int16_t",
+    "ui16": "uint16_t",
+    "i32": "int32_t",
+    "index": "int64_t",
+    "size": "int64_t",
+    "bool": "_Bool",
+}
 
 
 def _jit_eval_shape_expr(expr: object, env: dict[object, int]) -> int:
@@ -1022,12 +1005,10 @@ def _jit_eval_shape_expr(expr: object, env: dict[object, int]) -> int:
         case LoopIR.Const():
             return int(expr.val)
         case LoopIR.Read():
-            if expr.name in env:
-                return env[expr.name]
             key = repr(expr.name)
-            if key in env:
-                return env[key]
-            assert False, f"could not resolve dynamic tensor shape from {key}"
+            value = env.get(expr.name, env.get(key))
+            assert value is not None, f"could not resolve dynamic tensor shape from {key}"
+            return value
         case LoopIR.USub():
             return -_jit_eval_shape_expr(expr.arg, env)
         case LoopIR.BinOp():
@@ -1050,89 +1031,84 @@ def _jit_eval_shape_expr(expr: object, env: dict[object, int]) -> int:
             assert False, f"unsupported dynamic tensor shape expression: {expr}"
 
 
-def _jit_flatten_python_values(value: object) -> list[object]:
-    # flatten nested Python sequences into the contiguous buffer layout
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
-        return [value]
-    flat: list[object] = []
-    for item in value:
-        flat.extend(_jit_flatten_python_values(item))
-    return flat
-
-
-def _jit_sync_python_sequence(target: MutableSequence[object], buf: object, offset: int = 0) -> int:
-    # copy writable tensor outputs back into nested Python lists
-    for i, item in enumerate(target):
-        if isinstance(item, MutableSequence):
-            offset = _jit_sync_python_sequence(item, buf, offset)
-            continue
-        target[i] = buf[offset]
-        offset += 1
-    return offset
+JIT_SEQUENCE_EXCLUSIONS = (str, bytes, bytearray, memoryview)
 
 
 def _jit_tensor_converter(*, ffi: FFI, index: int, tensor_type: T.Tensor, writable: bool) -> Callable[[object, dict[object, int], list[object], list[Callable[[], None]]], object]:
     # build one argument converter for tensor or window inputs
     shape = tensor_type.shape()
-    c_type = _jit_tensor_c_type(tensor_type)
+    assert (basetype := str(tensor_type.basetype())) in JIT_TENSOR_C_TYPES, f"unsupported JIT tensor dtype: {basetype}"
+    c_type = JIT_TENSOR_C_TYPES[basetype]
+    is_seq = lambda x: isinstance(x, Sequence) and not isinstance(x, JIT_SEQUENCE_EXCLUSIONS)
 
-    def direct_buffer_like(value: object) -> bool:
-        return isinstance(value, (bytes, bytearray, memoryview)) or (hasattr(value, "ndim") and hasattr(value, "dtype") and hasattr(value, "shape") and getattr(value, "ndim") > 0)
+    def linearize(value: object) -> tuple[list[object], list[tuple[MutableSequence[object], int]]]:
+        if not is_seq(value):
+            return [value], []
+        target = value if writable else None
+        if target is not None:
+            assert isinstance(target, MutableSequence), f"argument {index + 1}: writable tensor args passed as Python sequences must be mutable at every level"
+        flat: list[object] = []
+        leaves: list[tuple[MutableSequence[object], int]] = []
+        for i, item in enumerate(value):
+            if is_seq(item):
+                child_flat, child_leaves = linearize(item)
+                flat.extend(child_flat)
+                leaves.extend(child_leaves)
+            else:
+                flat.append(item)
+                if target is not None:
+                    leaves.append((target, i))
+        return flat, leaves
 
     def convert(value: object, shape_env: dict[object, int], keepalive: list[object], syncbacks: list[Callable[[], None]]) -> object:
-        assert not direct_buffer_like(value), f"argument {index + 1}: direct buffer inputs are not supported by jit(); " "pass Python lists/scalars or use jit(proc, raw=True)"
+        assert not (isinstance(value, (bytes, bytearray, memoryview)) or (hasattr(value, "ndim") and hasattr(value, "dtype") and hasattr(value, "shape") and getattr(value, "ndim") > 0)), f"argument {index + 1}: direct buffer inputs are not supported by jit(); " "pass Python lists/scalars or use jit(proc, raw=True)"
+        numel = math.prod(_jit_eval_shape_expr(expr, shape_env) for expr in shape)
 
-        numel = 1
-        for expr in shape:
-            numel *= _jit_eval_shape_expr(expr, shape_env)
-
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray, memoryview)):
+        if not is_seq(value):
             assert numel == 1, f"argument {index + 1}: expected {numel} values, got scalar {type(value).__name__}"
             assert not writable, f"argument {index + 1}: writable scalar tensor args require a mutable sequence"
             assert isinstance(value, numbers.Real), f"argument {index + 1}: expected scalar numeric data, got {type(value).__name__}"
             flat = [value]
+            leaves: list[tuple[MutableSequence[object], int]] = []
         else:
-            assert not writable or isinstance(value, MutableSequence), f"argument {index + 1}: writable tensor args passed as Python sequences must be mutable"
-            flat = _jit_flatten_python_values(value)
+            flat, leaves = linearize(value)
             assert len(flat) == numel, f"argument {index + 1}: expected {numel} values, got {len(flat)}"
 
         buf = ffi.new(f"{c_type}[{numel}]", flat)
         keepalive.append(buf)
-        if writable and isinstance(value, MutableSequence):
-            syncbacks.append(lambda target=value, cffi_buf=buf: _jit_sync_python_sequence(target, cffi_buf))
+        if writable:
+
+            def sync(leaf_refs=leaves, cffi_buf=buf):
+                for offset, (target, index) in enumerate(leaf_refs):
+                    target[index] = cffi_buf[offset]
+
+            syncbacks.append(sync)
         return int(ffi.cast("uintptr_t", buf))
 
     return convert
-
-
-def _jit_scalar_converter(*, name: object) -> Callable[[object, dict[object, int], list[object], list[Callable[[], None]]], int]:
-    # build one argument converter for scalar size and loop index inputs
-    def convert(value: object, shape_env: dict[object, int], _keepalive: list[object], _syncbacks: list[Callable[[], None]]) -> int:
-        value = int(value)
-        shape_env[name] = value
-        shape_env[repr(name)] = value
-        return value
-
-    return convert
-
-
-def _jit_argument_converter(i: int, arg: object, kind: int, ffi: FFI) -> Callable[[object, dict[object, int], list[object], list[Callable[[], None]]], object]:
-    # dispatch each procedure argument to the right JIT converter
-    match arg.type:
-        case _ if arg.type.is_tensor_or_window():
-            tensor_type = arg.type.as_tensor if isinstance(arg.type, T.Window) else arg.type
-            return _jit_tensor_converter(ffi=ffi, index=i, tensor_type=tensor_type, writable=kind == 2)
-        case _ if isinstance(arg.type, (LoopIR.Size, LoopIR.Index, LoopIR.Int, LoopIR.Bool, LoopIR.Stride)):
-            return _jit_scalar_converter(name=arg.name)
-        case _:
-            assert False, f"unsupported JIT argument type for {arg.name}: {arg.type}"
 
 
 def _jit_wrap(raw_fn: JitFunc, proc: Procedure, arg_kinds: bytes) -> Callable[..., None]:
     # adapt the raw entrypoint to Python objects and sync writable outputs
     ffi = FFI()
     ffi.cdef("typedef unsigned long uintptr_t;")
-    converters = [_jit_argument_converter(i, arg, arg_kinds[i], ffi) for i, arg in enumerate(proc._loopir_proc.args)]
+    converters = []
+    for i, arg in enumerate(proc._loopir_proc.args):
+        match arg.type:
+            case _ if arg.type.is_tensor_or_window():
+                tensor_type = arg.type.as_tensor if isinstance(arg.type, T.Window) else arg.type
+                converters.append(_jit_tensor_converter(ffi=ffi, index=i, tensor_type=tensor_type, writable=arg_kinds[i] == 2))
+            case _ if isinstance(arg.type, JIT_SCALAR_TYPES):
+                name = arg.name
+
+                def convert(value: object, shape_env: dict[object, int], _keepalive: list[object], _syncbacks: list[Callable[[], None]], name=name) -> int:
+                    value = int(value)
+                    shape_env[name] = shape_env[repr(name)] = value
+                    return value
+
+                converters.append(convert)
+            case _:
+                assert False, f"unsupported JIT argument type for {arg.name}: {arg.type}"
 
     def wrapped(*args):
         assert len(args) == len(converters), f"jit expected {len(converters)} arguments, got {len(args)}"

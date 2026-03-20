@@ -25,6 +25,13 @@ def copy_n(N: size, dst: f32[N] @ DRAM, src: f32[N] @ DRAM):
         dst[i] = src[i]
 
 
+@proc
+def copy_2x2(dst: f32[2, 2] @ DRAM, src: f32[2, 2] @ DRAM):
+    for i in seq(0, 2):
+        for j in seq(0, 2):
+            dst[i, j] = src[i, j]
+
+
 def test_jit_rejects_direct_numpy_buffers():
     fn = jit(copy4)
     src = np.array([1.0, -2.0, 3.5, 4.25], dtype=np.float32)
@@ -43,6 +50,22 @@ def test_jit_validates_python_list_length_against_dynamic_shape():
     fn = jit(copy_n)
     with pytest.raises(AssertionError, match="expected 4 values, got 3"):
         fn(4, [0.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0])
+
+
+def test_jit_syncs_nested_writable_sequences():
+    fn = jit(copy_2x2)
+    dst = [[0.0, 0.0], [0.0, 0.0]]
+    src = [[1.0, 2.0], [3.0, 4.0]]
+    fn(dst, src)
+    np.testing.assert_allclose(dst, src)
+
+
+def test_jit_rejects_immutable_nested_writable_sequences():
+    fn = jit(copy_2x2)
+    dst = [[0.0, 0.0], (0.0, 0.0)]
+    src = [[1.0, 2.0], [3.0, 4.0]]
+    with pytest.raises(AssertionError, match="mutable at every level"):
+        fn(dst, src)
 
 
 def test_jit_rejects_keyword_args():
