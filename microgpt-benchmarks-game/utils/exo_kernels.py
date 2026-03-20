@@ -137,13 +137,13 @@ def cross_entropy_bwd(M: size, N: size, probs: f64[M, N] @ DRAM, target_ids: siz
 
 
 @proc
-def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM):
+def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v: f64[N] @ DRAM, lr: f64[1] @ DRAM, beta1_t: f64[1] @ DRAM, beta2_t: f64[1] @ DRAM, beta1: f64[1] @ DRAM, beta2: f64[1] @ DRAM):
     inv_b1: f64 @ Stack
     inv_b2: f64 @ Stack
     inv_beta1_t: f64 @ Stack
     inv_beta2_t: f64 @ Stack
-    inv_b1 = 1.0 - 0.85
-    inv_b2 = 1.0 - 0.99
+    inv_b1 = 1.0 - beta1[0]
+    inv_b2 = 1.0 - beta2[0]
     inv_beta1_t = 1.0 / beta1_t[0]
     inv_beta2_t = 1.0 / beta2_t[0]
 
@@ -154,8 +154,8 @@ def adam(N: size, param: f64[N] @ DRAM, grad: f64[N] @ DRAM, m: f64[N] @ DRAM, v
         m_hat: f64 @ Stack
         v_hat: f64 @ Stack
         g = grad[i]
-        m_val = 0.85 * m[i] + inv_b1 * g
-        v_val = 0.99 * v[i] + inv_b2 * g * g
+        m_val = beta1[0] * m[i] + inv_b1 * g
+        v_val = beta2[0] * v[i] + inv_b2 * g * g
         m_hat = m_val * inv_beta1_t
         v_hat = v_val * inv_beta2_t
         param[i] = param[i] - lr[0] * m_hat / (sqrt(v_hat) + 1e-8)

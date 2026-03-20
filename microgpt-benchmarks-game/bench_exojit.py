@@ -233,7 +233,7 @@ def bwd_step(vocab_size: size, dx1: f64[BLOCK_SIZE, N_EMBED] @ DRAM, g_lm_head: 
 
 PARAMS_FIELDS = "wte wpe lm_head attn_wq attn_wk attn_wv attn_wo mlp_fc1 mlp_fc2".split()
 SCRATCH_FIELDS = "emb rms_init x0 x1 logits attn_xn attn_rms q k v attn_w out_flat mlp_xn mlp_rms h_pre h dh dh_pre dx0 dx1 dattn_out".split()
-SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2 rms_inv_n".split()
+SCALARS_FIELDS = "opt_lr opt_bc1 opt_bc2 rms_inv_n opt_beta1 opt_beta2".split()
 
 
 def init_normal_(buf: Buf, *, scale: float):
@@ -330,8 +330,10 @@ if __name__ == "__main__":
     opt_state = {"m": Buf(flat_params.n), "v": Buf(flat_params.n)}
 
     scratch = bind(SCRATCH_FIELDS, Buf(layout_numel(scratch_layout(vocab_size))), scratch_layout(vocab_size))
-    scalars = bind(SCALARS_FIELDS, Buf(4), ((1,), (1,), (1,), (1,)))
+    scalars = bind(SCALARS_FIELDS, Buf(6), ((1,), (1,), (1,), (1,), (1,), (1,)))
     scalars["rms_inv_n"][0] = 1.0 / N_EMBED
+    scalars["opt_beta1"][0] = 0.9
+    scalars["opt_beta2"][0] = 0.999
 
     adam_step = jit(simplify(adam.partial_eval(N=flat_params.n)))._raw
 
@@ -342,8 +344,8 @@ if __name__ == "__main__":
     g_wte_bytes = grads["wte"].n * 8
     g_wpe_bytes = grads["wpe"].n * 8
     lr_t = [0.01 * (1.0 - step / num_steps) for step in range(num_steps)]
-    bc1 = [1.0 - 0.85 ** (step + 1) for step in range(num_steps)]
-    bc2 = [1.0 - 0.99 ** (step + 1) for step in range(num_steps)]
+    bc1 = [1.0 - 0.9 ** (step + 1) for step in range(num_steps)]
+    bc2 = [1.0 - 0.999 ** (step + 1) for step in range(num_steps)]
     memset = ctypes.memset
     perf_counter = time.perf_counter
     step_times = []
@@ -361,7 +363,7 @@ if __name__ == "__main__":
 
         bwd_step(vocab_size, scratch["dx1"].ptr, grads["lm_head"].ptr, scratch["logits"].ptr, scratch["dx0"].ptr, params["lm_head"].ptr, batch["loss_mask"].ptr, batch["inv_sum_mask"].ptr, batch["target_ids"].ptr, grads["mlp_fc2"].ptr, grads["mlp_fc1"].ptr, scratch["dh"].ptr, scratch["dh_pre"].ptr, grads["attn_wq"].ptr, grads["attn_wk"].ptr, grads["attn_wv"].ptr, grads["attn_wo"].ptr, scratch["dattn_out"].ptr, grads["wte"].ptr, grads["wpe"].ptr, scratch["emb"].ptr, scratch["rms_init"].ptr, scratch["x0"].ptr, scratch["attn_xn"].ptr, scratch["attn_rms"].ptr, scratch["q"].ptr, scratch["k"].ptr, scratch["v"].ptr, scratch["attn_w"].ptr, scratch["out_flat"].ptr, scratch["x1"].ptr, scratch["mlp_xn"].ptr, scratch["mlp_rms"].ptr, scratch["h_pre"].ptr, scratch["h"].ptr, params["attn_wq"].ptr, params["attn_wk"].ptr, params["attn_wv"].ptr, params["attn_wo"].ptr, params["mlp_fc1"].ptr, params["mlp_fc2"].ptr, scalars["rms_inv_n"].ptr, batch["input_ids"].ptr)
 
-        adam_step(flat_params.ptr, flat_grads.ptr, opt_state["m"].ptr, opt_state["v"].ptr, scalars["opt_lr"].ptr, scalars["opt_bc1"].ptr, scalars["opt_bc2"].ptr)
+        adam_step(flat_params.ptr, flat_grads.ptr, opt_state["m"].ptr, opt_state["v"].ptr, scalars["opt_lr"].ptr, scalars["opt_bc1"].ptr, scalars["opt_bc2"].ptr, scalars["opt_beta1"].ptr, scalars["opt_beta2"].ptr)
 
         step_times.append(perf_counter() - t0)
 
