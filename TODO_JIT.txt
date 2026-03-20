@@ -1,0 +1,50 @@
+TODO: Make @jit decorator accept both raw Python functions and Exo procedures
+
+CURRENT BEHAVIOR:
+- @jit without raw=True: accepts Python functions (internally applies @proc)
+- @jit(raw=True): requires @proc to be applied first
+
+EXAMPLES:
+  Works:
+    @jit(optimize=foo)
+    def bar(...): ...
+
+  Also works (but redundant @proc):
+    @jit(optimize=foo, raw=True)
+    @proc
+    def bar(...): ...
+
+  Fails:
+    @jit(optimize=foo, raw=True)
+    def bar(...): ...  # Error: expected Exo procedure
+
+PROPOSED FIX:
+Modify jit() to detect input type and handle both cases:
+
+  def jit(optimize=None, raw=False):
+      def decorator(fn_or_proc):
+          # Detect if input is already an Exo procedure
+          if isinstance(fn_or_proc, Procedure):
+              proc = fn_or_proc
+          else:
+              # Apply @proc internally
+              proc = proc_(fn_or_proc)
+          
+          if optimize:
+              proc = optimize(proc)
+          
+          compiled = compile_proc(proc)
+          
+          if raw:
+              return compiled._raw
+          return compiled
+      return decorator
+
+BENEFITS:
+- Consistent API: @jit always works directly on functions
+- No need to remember when @proc is required
+- Cleaner code in benchmarks
+
+FILES TO UPDATE:
+- exojit/main.py (jit implementation)
+- microgpt-benchmarks-game/bench_exojit.py (remove redundant @proc decorators)
