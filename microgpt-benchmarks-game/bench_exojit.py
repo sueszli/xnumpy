@@ -464,48 +464,47 @@ SCRATCH_SHAPES: dict[str, tuple] = {
     "dv": (N_HEAD, BLOCK_SIZE, HEAD_DIM),
 }
 
+partition = lambda shapes, arr: {name: (ctypes.c_double * prod(shape)).from_buffer(arr, off * 8) for (name, shape), off in zip(shapes.items(), accumulate((prod(s) for s in shapes.values()), initial=0))}
 
-if __name__ == "__main__":
-    partition = lambda shapes, arr: {name: (ctypes.c_double * prod(shape)).from_buffer(arr, off * 8) for (name, shape), off in zip(shapes.items(), accumulate((prod(s) for s in shapes.values()), initial=0))}
+n = sum(prod(s) for s in PARAMS_SHAPES.values())
+flat_params = (ctypes.c_double * n)(*(random.gauss(0.0, 0.08) for _ in range(n)))
+params = partition(PARAMS_SHAPES, flat_params)
 
-    n = sum(prod(s) for s in PARAMS_SHAPES.values())
-    flat_params = (ctypes.c_double * n)(*(random.gauss(0.0, 0.08) for _ in range(n)))
-    params = partition(PARAMS_SHAPES, flat_params)
+flat_grads, opt_m, opt_v = ((ctypes.c_double * n)() for _ in range(3))
+grads = partition(PARAMS_SHAPES, flat_grads)
 
-    flat_grads, opt_m, opt_v = ((ctypes.c_double * n)() for _ in range(3))
-    grads = partition(PARAMS_SHAPES, flat_grads)
+scratch = partition(SCRATCH_SHAPES, (ctypes.c_double * sum(prod(s) for s in SCRATCH_SHAPES.values()))())
+opt_lr, opt_bc1, opt_bc2 = ((ctypes.c_double * 1)() for _ in range(3))
 
-    scratch = partition(SCRATCH_SHAPES, (ctypes.c_double * sum(prod(s) for s in SCRATCH_SHAPES.values()))())
-    opt_lr, opt_bc1, opt_bc2 = ((ctypes.c_double * 1)() for _ in range(3))
+static_args = {
+    "vocab_size": vocab_size,
+    "total_params": len(flat_params),
+    **{f: ctypes.addressof(scratch[f]) for f in SCRATCH_SHAPES},
+    **{f: ctypes.addressof(params[f]) for f in PARAMS_SHAPES},
+    **{"g_" + f: ctypes.addressof(grads[f]) for f in PARAMS_SHAPES},
+    "flat_params": ctypes.addressof(flat_params),
+    "flat_grads": ctypes.addressof(flat_grads),
+    "opt_m": ctypes.addressof(opt_m),
+    "opt_v": ctypes.addressof(opt_v),
+    "lr": ctypes.addressof(opt_lr),
+    "beta1_t": ctypes.addressof(opt_bc1),
+    "beta2_t": ctypes.addressof(opt_bc2),
+}
 
-    static_args = {
-        "vocab_size": vocab_size,
-        "total_params": len(flat_params),
-        **{f: ctypes.addressof(scratch[f]) for f in SCRATCH_SHAPES},
-        **{f: ctypes.addressof(params[f]) for f in PARAMS_SHAPES},
-        **{"g_" + f: ctypes.addressof(grads[f]) for f in PARAMS_SHAPES},
-        "flat_params": ctypes.addressof(flat_params),
-        "flat_grads": ctypes.addressof(flat_grads),
-        "opt_m": ctypes.addressof(opt_m),
-        "opt_v": ctypes.addressof(opt_v),
-        "lr": ctypes.addressof(opt_lr),
-        "beta1_t": ctypes.addressof(opt_bc1),
-        "beta2_t": ctypes.addressof(opt_bc2),
-    }
+step_times = []
+for step in range(NUM_STEPS):
+    opt_lr[0] = 0.01 * (1.0 - step / NUM_STEPS)
+    opt_bc1[0] = 1.0 - 0.9 ** (step + 1)
+    opt_bc2[0] = 1.0 - 0.999 ** (step + 1)
+    batch = tokenized[step % len(tokenized)]
+    ctypes.memset(ctypes.addressof(grads["wte"]), 0, len(grads["wte"]) * 8)
+    ctypes.memset(ctypes.addressof(grads["wpe"]), 0, len(grads["wpe"]) * 8)
+    t0 = time.perf_counter()
+    train_step(**static_args, **{k: ctypes.addressof(batch[k]) for k in ("loss_mask", "inv_sum_mask", "input_ids", "target_ids")})
+    step_times.append(time.perf_counter() - t0)
 
-    step_times = []
-    for step in range(NUM_STEPS):
-        opt_lr[0] = 0.01 * (1.0 - step / NUM_STEPS)
-        opt_bc1[0] = 1.0 - 0.9 ** (step + 1)
-        opt_bc2[0] = 1.0 - 0.999 ** (step + 1)
-        batch = tokenized[step % len(tokenized)]
-        ctypes.memset(ctypes.addressof(grads["wte"]), 0, len(grads["wte"]) * 8)
-        ctypes.memset(ctypes.addressof(grads["wpe"]), 0, len(grads["wpe"]) * 8)
-        t0 = time.perf_counter()
-        train_step(**static_args, **{k: ctypes.addressof(batch[k]) for k in ("loss_mask", "inv_sum_mask", "input_ids", "target_ids")})
-        step_times.append(time.perf_counter() - t0)
 
-    save_times(step_times)
-    W = namedtuple("W", ["data"])
-    display = lambda k: ("layer0." + k) if k.startswith(("attn", "mlp")) else k
-    assert_weights_match({display(k): [[W(float(params[k][i * s[1] + j])) for j in range(s[1])] for i in range(len(params[k]) // s[1])] for k, s in PARAMS_SHAPES.items()})
+save_times(step_times)
+W = namedtuple("W", ["data"])
+display = lambda k: ("layer0." + k) if k.startswith(("attn", "mlp")) else k
+assert_weights_match({display(k): [[W(float(params[k][i * s[1] + j])) for j in range(s[1])] for i in range(len(params[k]) // s[1])] for k, s in PARAMS_SHAPES.items()})
