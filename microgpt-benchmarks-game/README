@@ -10,47 +10,39 @@ can you beat me? to submit: add a .py file prefixed with your username and open 
 any python library is welcome, but no other language embedded within the file.
 
 
-results
--------
+# speedup over original version
 
-    
-    # speedup over baseline
-    
-    sueszli_exojit: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 2xK
-    
-    sueszli_numpy : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 434x
-    
-    sueszli_torch : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 361x
-    
-    sueszli_jax   : ▇▇▇▇▇▇▇ 162x
-    
-    sueszli_plain : ▏ 9x
-    
-    original      : ▏ 1x
-    
-    –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––– 
-    
-    'sueszli_exojit'
-      Time (mean ± σ):          36 μs ±        0 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):        36 μs …       36 μs    1000 runs
-    
-    'sueszli_numpy'
-      Time (mean ± σ):         153 μs ±       25 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):       136 μs …      539 μs    1000 runs
-    
-    'sueszli_torch'
-      Time (mean ± σ):         184 μs ±       22 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):       163 μs …      360 μs    1000 runs
-    
-    'sueszli_jax'
-      Time (mean ± σ):         411 μs ±        0 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):       411 μs …      411 μs    1000 runs
-    
-    'sueszli_plain'
-      Time (mean ± σ):        7242 μs ±     1035 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):      6702 μs …    25743 μs    1000 runs
-    
-    'original'
-      Time (mean ± σ):       66601 μs ±    20605 μs    [User: 0 μs, System: 0 μs]
-      Range (min … max):     20522 μs …   179583 μs    1000 runs
-    
+  sueszli_exojit  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 1850x
+  sueszli_numpy   ▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 434x
+  sueszli_torch   ▇▇▇▇▇▇▇▇▇▇▇▇ 361x
+  sueszli_jax     ▇▇▇▇▇ 162x
+  sueszli_plain   ▏ 9x
+  original        ▏ 1x
+
+
+# leaderboard
+
+'sueszli_exojit'
+  Time (mean ± σ):          36 μs ±        0 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):        36 μs …       36 μs    1000 runs
+
+'sueszli_numpy'
+  Time (mean ± σ):         153 μs ±       25 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):       136 μs …      539 μs    1000 runs
+
+'sueszli_torch'
+  Time (mean ± σ):         184 μs ±       22 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):       163 μs …      360 μs    1000 runs
+
+'sueszli_jax'
+  Time (mean ± σ):         411 μs ±        0 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):       411 μs …      411 μs    1000 runs
+
+'sueszli_plain'
+  Time (mean ± σ):        7242 μs ±     1035 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):      6702 μs …    25743 μs    1000 runs
+
+'original'
+  Time (mean ± σ):       66601 μs ±    20605 μs    [User: 0 μs, System: 0 μs]
+  Range (min … max):     20522 μs …   179583 μs    1000 runs
+

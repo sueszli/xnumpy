@@ -1,6 +1,5 @@
 # /// script
 # requires-python = "==3.14.*"
-# dependencies = ["termgraph"]
 # ///
 
 import csv
@@ -74,10 +73,6 @@ def print_times(path: Path) -> None:
 
 
 def print_times_all() -> None:
-    from termgraph.args import Args
-    from termgraph.chart import BarChart
-    from termgraph.data import Data
-
     if not TIMES_DIR.exists():
         return
 
@@ -91,15 +86,18 @@ def print_times_all() -> None:
         return
     entries.sort(key=lambda x: x[1], reverse=False)
 
-    baseline_ms = max(mean for _, mean in entries)
-    speedups = [(name, baseline_ms / mean) for name, mean in entries]
-    speedup_data = Data([[s] for _, s in speedups], [name for name, _ in speedups])
-    speedup_args = Args(title="speedup over baseline", width=80, format="{:.0f}x", space_between=True)
-    BarChart(speedup_data, speedup_args).draw()
+    original_ms = next((mean for name, mean in entries if name == "original"), max(mean for _, mean in entries))
+    speedups = [(name, original_ms / mean) for name, mean in entries]
+    max_speedup = max(s for _, s in speedups)
+    bar_width = 60
+    name_width = max(len(name) for name, _ in speedups)
 
-    print()
-    print("–" * 100, "\n")
+    print("\n# speedup over original version\n")
+    for name, speedup in speedups:
+        bar = "▇" * round(speedup / max_speedup * bar_width) or "▏"
+        print(f"  {name:<{name_width}}  {bar} {speedup:.0f}x")
 
+    print("\n\n# leaderboard\n")
     for name, _ in entries:
         print_times(TIMES_DIR / f"{name}.csv")
 
