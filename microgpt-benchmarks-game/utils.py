@@ -45,6 +45,17 @@ def assert_weights_match(state_dict, atol: float = 1e-5) -> None:
     assert violations == 0, f"weights mismatch (atol={atol}): {violations}/{total} params exceed tolerance, max diff={max_diff:.2e} at {max_loc}"
 
 
+def save_times(step_times: list[float]) -> None:
+    name = Path(inspect.stack()[1].filename).stem
+    path = TIMES_DIR / f"{name}.csv"
+    path.parent.mkdir(exist_ok=True)
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["step", "time_ms"])
+        writer.writerows([[i + 1, f"{t * 1000:.3f}"] for i, t in enumerate(step_times)])
+    print_times(path)
+
+
 def print_times(path: Path) -> None:
     if not path.exists():
         return
@@ -78,25 +89,16 @@ def print_times_all() -> None:
             entries.append((path.stem, sum(times) / len(times)))
     if not entries:
         return
-
-    entries.sort(key=lambda x: x[1], reverse=True)
-    for name, _ in entries:
-        print_times(TIMES_DIR / f"{name}.csv")
+    entries.sort(key=lambda x: x[1], reverse=False)
 
     chart_data = Data([[mean_ms * 1000] for _, mean_ms in entries], [name for name, _ in entries])
     chart_args = Args(title="mean train step time [\u03bcs]", width=60, format="{:.0f}", space_between=True)
     BarChart(chart_data, chart_args).draw()
 
+    print("\n" * 2, "-" * 75, "\n")
 
-def save_times(step_times: list[float]) -> None:
-    name = Path(inspect.stack()[1].filename).stem
-    path = TIMES_DIR / f"{name}.csv"
-    path.parent.mkdir(exist_ok=True)
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["step", "time_ms"])
-        writer.writerows([[i + 1, f"{t * 1000:.3f}"] for i, t in enumerate(step_times)])
-    print_times(path)
+    for name, _ in entries:
+        print_times(TIMES_DIR / f"{name}.csv")
 
 
 if __name__ == "__main__":

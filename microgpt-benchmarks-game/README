@@ -1,0 +1,59 @@
+░█▄█░▀█▀░█▀▀░█▀▄░█▀█░█▀▀░█▀█░▀█▀░░░█▀▄░█▀▀░█▀█░█▀▀░█░█░█▄█░█▀█░█▀▄░█░█░█▀▀░░░█▀▀░█▀█░█▄█░█▀▀
+░█░█░░█░░█░░░█▀▄░█░█░█░█░█▀▀░░█░░░░█▀▄░█▀▀░█░█░█░░░█▀█░█░█░█▀█░█▀▄░█▀▄░▀▀█░░░█░█░█▀█░█░█░█▀▀
+░▀░▀░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀▀░▀░░░░▀░░░░▀▀░░▀▀▀░▀░▀░▀▀▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀░▀▀▀░░░▀▀▀░▀░▀░▀░▀░▀▀▀
+
+speed benchmark for karpathy's microgpt. a minimal gpt trained on tiny shakespeare,
+one forward + backward pass per step. ref: https://karpathy.github.io/2026/02/12/microgpt/
+
+to submit: add a .py file prefixed with your username and open a pr.
+one rule: any python library is welcome, but no inline c.
+
+results:
+    
+    # mean train step time [μs]
+    
+    bench_exojit  : ▏ 36
+    
+    bench_numpy   : ▏ 153
+    
+    bench_torch   : ▏ 184
+    
+    bench_jax     : ▏ 411
+    
+    bench_plain   : ▇▇▇▇▇▇ 7K
+    
+    bench_original: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 63K
+    
+    original      : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 67K
+    
+    
+     --------------------------------------------------------------------------- 
+    
+    'bench_exojit'
+      Time (mean ± σ):          36 μs ±        0 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):        36 μs …       36 μs    1000 runs
+    
+    'bench_numpy'
+      Time (mean ± σ):         153 μs ±       25 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):       136 μs …      539 μs    1000 runs
+    
+    'bench_torch'
+      Time (mean ± σ):         184 μs ±       22 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):       163 μs …      360 μs    1000 runs
+    
+    'bench_jax'
+      Time (mean ± σ):         411 μs ±        0 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):       411 μs …      411 μs    1000 runs
+    
+    'bench_plain'
+      Time (mean ± σ):        7242 μs ±     1035 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):      6702 μs …    25743 μs    1000 runs
+    
+    'bench_original'
+      Time (mean ± σ):       63175 μs ±    20165 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):     19051 μs …   194119 μs    1000 runs
+    
+    'original'
+      Time (mean ± σ):       66601 μs ±    20605 μs    [User: 0 μs, System: 0 μs]
+      Range (min … max):     20522 μs …   179583 μs    1000 runs
+    
