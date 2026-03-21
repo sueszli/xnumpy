@@ -465,11 +465,9 @@ SCRATCH_SHAPES: dict[str, tuple] = {
 }
 
 
-def partition(shapes, arr):
-    return {name: (ctypes.c_double * prod(shape)).from_buffer(arr, off * 8) for (name, shape), off in zip(shapes.items(), accumulate((prod(s) for s in shapes.values()), initial=0))}
-
-
 if __name__ == "__main__":
+    partition = lambda shapes, arr: {name: (ctypes.c_double * prod(shape)).from_buffer(arr, off * 8) for (name, shape), off in zip(shapes.items(), accumulate((prod(s) for s in shapes.values()), initial=0))}
+
     n = sum(prod(s) for s in PARAMS_SHAPES.values())
     flat_params = (ctypes.c_double * n)(*(random.gauss(0.0, 0.08) for _ in range(n)))
     params = partition(PARAMS_SHAPES, flat_params)
@@ -478,9 +476,7 @@ if __name__ == "__main__":
     grads = partition(PARAMS_SHAPES, flat_grads)
 
     scratch = partition(SCRATCH_SHAPES, (ctypes.c_double * sum(prod(s) for s in SCRATCH_SHAPES.values()))())
-    opt_lr = (ctypes.c_double * 1)()
-    opt_bc1 = (ctypes.c_double * 1)()
-    opt_bc2 = (ctypes.c_double * 1)()
+    opt_lr, opt_bc1, opt_bc2 = ((ctypes.c_double * 1)() for _ in range(3))
 
     static_args = {
         "vocab_size": vocab_size,
