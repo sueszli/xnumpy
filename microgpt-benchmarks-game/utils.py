@@ -91,11 +91,14 @@ def print_times_all() -> None:
         return
     entries.sort(key=lambda x: x[1], reverse=False)
 
-    chart_data = Data([[mean_ms * 1000] for _, mean_ms in entries], [name for name, _ in entries])
-    chart_args = Args(title="mean train step time [\u03bcs]", width=60, format="{:.0f}", space_between=True)
-    BarChart(chart_data, chart_args).draw()
+    baseline_ms = max(mean for _, mean in entries)
+    speedups = [(name, baseline_ms / mean) for name, mean in entries]
+    speedup_data = Data([[s] for _, s in speedups], [name for name, _ in speedups])
+    speedup_args = Args(title="speedup over baseline", width=80, format="{:.0f}x", space_between=True)
+    BarChart(speedup_data, speedup_args).draw()
 
-    print("\n" * 2, "-" * 75, "\n")
+    print()
+    print("–" * 100, "\n")
 
     for name, _ in entries:
         print_times(TIMES_DIR / f"{name}.csv")

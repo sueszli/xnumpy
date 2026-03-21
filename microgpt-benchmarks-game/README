@@ -14,22 +14,21 @@ results
 -------
 
     
-    # mean train step time [μs]
+    # speedup over baseline
     
-    sueszli_exojit: ▏ 36
+    sueszli_exojit: ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 2xK
     
-    sueszli_numpy : ▏ 153
+    sueszli_numpy : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 434x
     
-    sueszli_torch : ▏ 184
+    sueszli_torch : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 361x
     
-    sueszli_jax   : ▏ 411
+    sueszli_jax   : ▇▇▇▇▇▇▇ 162x
     
-    sueszli_plain : ▇▇▇▇▇▇ 7K
+    sueszli_plain : ▏ 9x
     
-    original      : ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇ 67K
+    original      : ▏ 1x
     
-    
-     --------------------------------------------------------------------------- 
+    –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––– 
     
     'sueszli_exojit'
       Time (mean ± σ):          36 μs ±        0 μs    [User: 0 μs, System: 0 μs]
