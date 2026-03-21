@@ -19,6 +19,9 @@ one forward + backward pass per step. ref: https://karpathy.github.io/2026/02/12
 beat each other's times! to submit: add a .py file prefixed with your username and open a pr.
 one rule: any python library is welcome, but no other language embedded within the file.
 
-results:
+
+results
+-------
+
 EOF
 uv run utils.py | tee >(perl -pe 's/\e\[[0-9;]*m//g; s/^/    /' >> README)
