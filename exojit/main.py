@@ -238,7 +238,8 @@ class IRGenerator:
 
     @staticmethod
     def _cmp_binop(lhs: SSAValue, rhs: SSAValue, op: str, emit: Callable[[Operation], SSAValue]) -> SSAValue:
-        integer_cmp_table = {"==": 0, "!=": 1, "<": 2, "<=": 3, ">": 4, ">=": 5}
+        P = llvm.ICmpPredicateFlag
+        integer_cmp_table = {"==": P.EQ.to_int(), "!=": P.NE.to_int(), "<": P.SLT.to_int(), "<=": P.SLE.to_int(), ">": P.SGT.to_int(), ">=": P.SGE.to_int()}
         float_cmp_table = {op: pred for pred, (op, ordered) in FCMP_PREDICATES.items() if ordered and op not in ("ord", "uno")}
         assert lhs.type == rhs.type
         if lhs.type == i1:
@@ -559,7 +560,7 @@ class IRGenerator:
             size_val = self._emit(llvm.ConstantOp(IntegerAttr(total_elements, i64), i64))  # alloca takes element count
             raw_ptr = self._emit(llvm.AllocaOp(size_val, mlir_type.element_type))
 
-        result = self._emit(UnrealizedConversionCastOp.get(raw_ptr, mlir_type))
+        result = self._emit(UnrealizedConversionCastOp.get([raw_ptr], [mlir_type]))
         self._syms[repr(alloc.name)] = result
         self._types[repr(alloc.name)] = alloc.type
 
@@ -901,7 +902,6 @@ def _to_llvmlite_moduleref(ir: llvmlite.ir.Module | str) -> tuple[llvmlite.bindi
     return mod_ref, tm
 
 
-@cache
 def to_asm(module: ModuleOp) -> str:
     # xdsl mlir -> native assembly text
     mod_ref, tm = _to_llvmlite_moduleref(LLVMLiteGenerator.generate(module))
@@ -1014,7 +1014,7 @@ def _jit_eval_shape_expr(expr: object, env: dict[object, int]) -> int:
             return int(expr.val)
         case LoopIR.Read():
             key = repr(expr.name)
-            value = env.get(expr.name, env.get(key))
+            value = env.get(key)
             assert value is not None, f"could not resolve dynamic tensor shape from {key}"
             return value
         case LoopIR.USub():
@@ -1087,8 +1087,8 @@ def _jit_tensor_converter(*, ffi: FFI, index: int, tensor_type: T.Tensor, writab
         if writable:
 
             def sync(leaf_refs=leaves, cffi_buf=buf):
-                for offset, (target, index) in enumerate(leaf_refs):
-                    target[index] = cffi_buf[offset]
+                for offset, (target, idx) in enumerate(leaf_refs):
+                    target[idx] = cffi_buf[offset]
 
             syncbacks.append(sync)
         return int(ffi.cast("uintptr_t", buf))
@@ -1115,7 +1115,7 @@ def _jit_wrap(raw_fn: JitFunc, proc: Procedure, arg_kinds: bytes) -> Callable[..
 
                 def convert(value: object, shape_env: dict[object, int], _keepalive: list[object], _syncbacks: list[Callable[[], None]], name=name) -> int:
                     value = int(value)
-                    shape_env[name] = shape_env[repr(name)] = value
+                    shape_env[repr(name)] = value
                     return value
 
                 converters.append(convert)
@@ -1203,16 +1203,16 @@ def _dedup_proc_names(user_module: object) -> list[Procedure]:
 def cli(source: Path, fmt: str | None):
     if not fmt:
         raise click.UsageError("Specify one of --c, --mlir, or --asm")
-    source = _dedup_proc_names(load_user_code(source))
+    procs = _dedup_proc_names(load_user_code(source))
 
     match fmt:
         case "c":
             tmpdir = Path(tempfile.mkdtemp())
-            exo_compile_procs(source, tmpdir, "o.c", "o.h")
+            exo_compile_procs(procs, tmpdir, "o.c", "o.h")
             text = (tmpdir / "o.c").read_text()
         case "mlir":
-            text = to_mlir(source)
+            text = str(to_mlir(procs))
         case "asm":
-            text = to_asm(to_mlir(source))
+            text = to_asm(to_mlir(procs))
 
     click.echo(text)
