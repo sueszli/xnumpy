@@ -1,0 +1,90 @@
+what exo can't express
+---------------------
+
+- no structs/tuples: can't group tensors.
+  train_loop has 59 flat args instead of e.g.
+  `model: {wq: f64[M,K], wk: f64[M,K], ...}`
+
+- no auto allocation: every scratch buffer is
+  caller-allocated and threaded through calls.
+  26 scratch tensors in the benchmark.
+  `attn(M,N, out, q,k,v, scratch1,scratch2,...)`
+
+- no recursion or graphs: procs are straight-line
+  loops only. can't express tree traversals,
+  dynamic graphs, or variable-length structures.
+
+- no gather/scatter: no runtime int indexing.
+  embedding lookup = O(vocab) linear scan:
+  `for v in seq(0,V): if v == ids[t]: out[t] += w[v]`
+
+- no dependent types: shape args unchecked.
+  wrong size = silent wrong result.
+  `matmul(M,N,K, out, x, w)` — nothing verifies
+  out is [M,N], x is [M,K], w is [K,N].
+
+- no broadcasting:
+  `for j in seq(0,N): y[j] = s * x[j]`
+  instead of `y = s * x`
+
+- no slicing:
+  `wq[h*HD+d, e]` in a 4-deep loop
+  instead of `wq[h*HD:(h+1)*HD, :]`
+
+- no inline reductions:
+  `acc: f64 @ Stack; acc = 0.0;`
+  `for j in seq(0,N): acc += x[j]`
+  instead of `sum(x)`
+
+- no zero/fill:
+  `for i in seq(0,M): for j in seq(0,N):`
+  `  buf[i,j] = 0.0`
+  instead of `memset(buf, 0)`
+
+- no ternary: only `select(a,b,c,d)` (float <).
+  relu = `select(0.0, x[i], x[i], 0.0)`
+
+- no layout parametricity: can't abstract over
+  transposed indices. matmul/matmul_t/matmul_lt
+  are three copy-pasted procs.
+
+- no closures: module-level constants only.
+  all config (N_EMBED, BLOCK_SIZE, ...) must be
+  module globals.
+
+- no scalar args: must wrap in size-1 tensor.
+  `lr: f64[1] @ DRAM` instead of `lr: f64`
+
+- no linalg primitives: matmul, softmax, rmsnorm,
+  attention, adam all written from scratch.
+
+- 3 math externs only: expf, sqrt, select.
+  each new one = hand-written Extern subclass.
+
+- only DRAM built-in: stack/SIMD need
+  user-defined Memory subclasses with C codegen.
+
+- row-major only, no alignment/padding controls.
+
+- no dotted calls: `obj.method()` = parse error.
+
+- no compound const exprs: no constant folding.
+  `1.0/HD**0.5` must be pre-computed.
+
+- no let-bindings: declare + init = two stmts.
+
+- no nested procs: @proc must be top-level.
+
+- no variadic/default/keyword args.
+
+- no namespaces: flat global, no import/export.
+
+- @ hijacked for memory annotations, breaks
+  type checkers (no py.typed/stubs).
+
+- inspect.stack() depth-sensitive: extra
+  wrappers break proc parsing.
+
+- no extension API: monkey-patch internals only.
+
+- PEP 667 (Python 3.14): exo breaks.
