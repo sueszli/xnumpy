@@ -64,6 +64,7 @@ class FLogOp(IRDLOperation):
 
 @irdl_op_definition
 class BrOp(IRDLOperation):
+    # https://github.com/xdslproject/xdsl/pull/5822
     name = "llvm.br"
     arguments = var_operand_def()
     successor = successor_def()
