@@ -34,6 +34,8 @@ class VectorFMaxOp(IRDLOperation):
 
 @irdl_op_definition
 class FSqrtOp(IRDLOperation):
+    # https://mlir.llvm.org/docs/Dialects/LLVM/#llvmintrsqrt-llvmsqrtop
+    # https://github.com/xdslproject/xdsl/pull/5823
     name = "llvm.intr.sqrt"
 
     T: ClassVar = VarConstraint("T", AnyAttr())
