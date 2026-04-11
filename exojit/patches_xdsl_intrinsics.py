@@ -3,11 +3,9 @@ from typing import ClassVar, TypeAlias
 
 from xdsl.dialects import llvm, vector
 from xdsl.dialects.builtin import DenseIntOrFPElementsAttr, IntegerAttr, VectorType, f32, f64, i64
-from xdsl.dialects.llvm import FAbsOp, FNegOp, MaskedStoreOp, VectorFMaxOp
+from xdsl.dialects.llvm import FAbsOp, FNegOp, FSqrtOp, MaskedStoreOp, VectorFMaxOp
 from xdsl.ir import Operation, SSAValue
 from xdsl.pattern_rewriter import PatternRewriter, RewritePattern, op_type_rewrite_pattern
-
-from exojit.patches_xdsl_llvm import FSqrtOp
 
 # `vec_*` intrinsic lowering: `llvm.CallOp` -> LLVM/vector dialect ops
 #

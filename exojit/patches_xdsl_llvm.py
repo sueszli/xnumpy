@@ -1,36 +1,16 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Callable, ClassVar
+from typing import Callable
 
 from xdsl.context import Context
 from xdsl.dialects import builtin, llvm, memref
 from xdsl.dialects.builtin import DYNAMIC_INDEX, IntegerAttr, MemRefType, UnrealizedConversionCastOp, i64
 from xdsl.dialects.llvm import GEP_USE_SSA_VAL, LLVMPointerType
-from xdsl.ir import BlockArgument, Operation, OpResult, SSAValue
-from xdsl.irdl import AnyAttr, IRDLOperation, VarConstraint, irdl_op_definition, operand_def, result_def, traits_def
+from xdsl.ir import BlockArgument, OpResult, SSAValue
 from xdsl.passes import ModulePass
 from xdsl.pattern_rewriter import GreedyRewritePatternApplier, PatternRewriter, PatternRewriteWalker, RewritePattern, TypeConversionPattern, attr_type_rewrite_pattern, op_type_rewrite_pattern
-from xdsl.traits import Pure
 from xdsl.transforms.convert_memref_to_ptr import ConvertCastOp
 from xdsl.utils.hints import isa
-
-
-@irdl_op_definition
-class FSqrtOp(IRDLOperation):
-    # https://github.com/xdslproject/xdsl/pull/5823
-    # https://mlir.llvm.org/docs/Dialects/LLVM/#llvmintrsqrt-llvmsqrtop
-    name = "llvm.intr.sqrt"
-
-    T: ClassVar = VarConstraint("T", AnyAttr())
-
-    arg = operand_def(T)
-    res = result_def(T)
-
-    traits = traits_def(Pure())
-
-    def __init__(self, arg: Operation | SSAValue):
-        super().__init__(operands=[arg], result_types=[SSAValue.get(arg).type])
-
 
 # `memref` -> `llvm.ptr` lowering: replace structured memory ops with raw pointer arithmetic
 #
