@@ -29,8 +29,8 @@ from xdsl.backend.llvm.convert_op import convert_op as _xdsl_convert_op
 from xdsl.backend.llvm.convert_type import convert_type
 from xdsl.builder import Builder
 from xdsl.context import Context
-from xdsl.dialects import llvm, memref, vector
-from xdsl.dialects.builtin import BoolAttr, Builtin, DenseIntOrFPElementsAttr, FloatAttr, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
+from xdsl.dialects import llvm, memref
+from xdsl.dialects.builtin import BoolAttr, Builtin, FloatAttr, IndexType, IntAttr, IntegerAttr, MemRefType, ModuleOp, NoneAttr, StringAttr, UnrealizedConversionCastOp, f16, f32, f64, i1, i8, i16, i32, i64
 from xdsl.dialects.llvm import BrOp, FLogOp, FNegOp, FSqrtOp
 from xdsl.dialects.utils import get_dynamic_index_list, split_dynamic_index_list
 from xdsl.ir import Attribute, Block, Operation, OpResult, Region, SSAValue
@@ -454,7 +454,7 @@ class IRGenerator:
             st(c(1), stride_p)
 
             # partition [lo, hi-1] across threads (schedule 34 = static)
-            null = self._emit(llvm.NullOp())
+            null = self._emit(llvm.ZeroOp(result_types=[ptr]))
             self.builder.insert(llvm.CallOp("__kmpc_for_static_init_8", null, gtid, c(34, i32), is_last_p, lower_p, upper_p, stride_p, c(1), c(1)))
 
             # this thread's chunk; clamp upper to original hi-1
@@ -484,12 +484,12 @@ class IRGenerator:
                 self.builder.insert(BrOp(hdr, self._emit(llvm.AddOp(iv, c(1)))))
             r.add_block(exit_)  # exit: static_fini + ret
             self.builder = Builder(insertion_point=InsertPoint.at_end(exit_))
-            self.builder.insert(llvm.CallOp("__kmpc_for_static_fini", self._emit(llvm.NullOp()), self._emit(llvm.LoadOp(blk.args[0], i32))))
+            self.builder.insert(llvm.CallOp("__kmpc_for_static_fini", self._emit(llvm.ZeroOp(result_types=[ptr])), self._emit(llvm.LoadOp(blk.args[0], i32))))
             self.builder.insert(llvm.ReturnOp())
         self._insert_at_module(llvm.FuncOp(oname, ftype, linkage=llvm.LinkageAttr("external"), body=region))
 
         # caller: fork_call(loc=null, argc, @outlined, lo*, hi*, ...shared_as_ptr)
-        args = [self._emit(llvm.NullOp()), c(len(names) + 2, i32), self._emit(llvm.AddressOfOp(oname, ptr)), lo_p, hi_p]
+        args = [self._emit(llvm.ZeroOp(result_types=[ptr])), c(len(names) + 2, i32), self._emit(llvm.AddressOfOp(oname, ptr)), lo_p, hi_p]
         args += [self._emit(UnrealizedConversionCastOp.get([syms[n]], [ptr])) if syms[n].type != ptr else syms[n] for n in names]
         self.builder.insert(llvm.CallOp("__kmpc_fork_call", *args))
 
@@ -759,19 +759,6 @@ class LLVMLiteGenerator:
     def _convert_op(op: Operation, builder: llvmlite.ir.IRBuilder, block_map: dict[Block, llvmlite.ir.Block], phi_map: dict[SSAValue, llvmlite.ir.PhiInstr], val_map: dict[SSAValue, llvmlite.ir.Value]) -> None:
         # translate one xdsl op to llvmlite ir. unmatched ops fall back to xdsl's convert_op
         match op:
-            case llvm.ConstantOp():
-                is_dense = isinstance(op.value, DenseIntOrFPElementsAttr)
-                val_map[op.result] = llvmlite.ir.Constant(convert_type(op.result.type), list(op.value.iter_values()) if is_dense else op.value.value.data)
-            case vector.BroadcastOp():
-                source_val = val_map[op.source]
-                vec_type = convert_type(op.vector.type)
-                n_lanes = op.vector.type.get_shape()[0]
-                undef = llvmlite.ir.Constant(vec_type, llvmlite.ir.Undefined)
-                inserted = builder.insert_element(undef, source_val, llvmlite.ir.Constant(llvmlite.ir.IntType(32), 0))
-                mask = llvmlite.ir.Constant(llvmlite.ir.VectorType(llvmlite.ir.IntType(32), n_lanes), [0] * n_lanes)
-                val_map[op.vector] = builder.shuffle_vector(inserted, undef, mask)
-            case llvm.AddressOfOp():
-                val_map[op.result] = builder.module.get_global(op.global_name.root_reference.data)
             case llvm.CallOp() if op.callee and op.callee.string_value().startswith("__kmpc_"):
                 fn = builder.module.get_global(op.callee.string_value())
                 args = [val_map[a] for a in op.args]
