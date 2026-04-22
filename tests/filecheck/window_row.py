@@ -38,9 +38,9 @@
 # CHECK-NEXT:     {{.*}} = llvm.add {{.*}}, {{.*}}: i64
 # CHECK-NEXT:     {{.*}} = llvm.mlir.constant(4) : i64
 # CHECK-NEXT:     {{.*}} = llvm.mul {{.*}}, {{.*}}: i64
-# CHECK-NEXT:     {{.*}} = "llvm.ptrtoint"({{.*}}) : (!llvm.ptr) -> i64
+# CHECK-NEXT:     {{.*}} = llvm.ptrtoint {{.*}} : !llvm.ptr to i64
 # CHECK-NEXT:     {{.*}} = llvm.add {{.*}}, {{.*}}: i64
-# CHECK-NEXT:     {{.*}} = "llvm.inttoptr"({{.*}}) : (i64) -> !llvm.ptr
+# CHECK-NEXT:     {{.*}} = llvm.inttoptr {{.*}} : i64 to !llvm.ptr
 # CHECK-NEXT:     "llvm.call"({{.*}}) <{callee = @set_row, fastmathFlags = #llvm.fastmath<none>, CConv = #llvm.cconv<ccc>, op_bundle_sizes = array<i32>, operandSegmentSizes = array<i32: 1, 0>, TailCallKind = #llvm.tailcallkind<none>}> : (!llvm.ptr) -> ()
 # CHECK-NEXT:     {{.*}} = llvm.add {{.*}}, {{.*}}: i64
 # CHECK-NEXT:     llvm.br {{.*}}({{.*}}: i64)

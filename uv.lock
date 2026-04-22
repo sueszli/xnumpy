@@ -237,7 +237,7 @@ requires-dist = [
     { name = "pytest-xdist" },
     { name = "torch" },
     { name = "tqdm" },
-    { name = "xdsl", git = "https://github.com/xdslproject/xdsl.git?rev=f86185545a7ab42b47b768bc6884d4c7ccc82329" },
+    { name = "xdsl", git = "https://github.com/xdslproject/xdsl.git?rev=f590d1827749798edeb3564bc895613ae6787ff6" },
 ]
 
 [[package]]
@@ -1168,8 +1168,8 @@ wheels = [
 
 [[package]]
 name = "xdsl"
-version = "0.62.1.dev19+gf86185545"
-source = { git = "https://github.com/xdslproject/xdsl.git?rev=f86185545a7ab42b47b768bc6884d4c7ccc82329#f86185545a7ab42b47b768bc6884d4c7ccc82329" }
+version = "0.62.2.dev26+gf590d1827"
+source = { git = "https://github.com/xdslproject/xdsl.git?rev=f590d1827749798edeb3564bc895613ae6787ff6#f590d1827749798edeb3564bc895613ae6787ff6" }
 dependencies = [
     { name = "immutabledict" },
     { name = "ordered-set" },
